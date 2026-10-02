@@ -12,6 +12,12 @@
 
 使用本地服务预览界面时，打开 <http://127.0.0.1:3000/?preview=1> 可强制使用对话模拟，避免触发 DeepSeek 调用；个人计划仍按填写资料实时估算。去掉 `?preview=1` 才会按 API Key 配置连接真实模型。
 
+## 语音输入
+
+点击麦克风后会开始识别。浏览器负责将语音识别为文字，页面会显示识别状态和转写内容；自然说完后自动按文字消息发送。若想检查或修改，主动点「结束录音」，再把修改后的文字放入输入框。语音识别本身不调用 DeepSeek，但部分浏览器会使用自己的在线识别服务，需要网络和麦克风权限。
+
+Web Speech 语音识别并非所有浏览器都支持。若内置浏览器提示不支持，可在 Chrome 中打开 `npm start` 显示的本地地址（建议先用 `?preview=1` 测试，不会调用 DeepSeek），允许麦克风后再试。若出现权限、麦克风或网络错误，页面会给出对应提示，并允许改用文字。直接打开 `file://` 页面时，即使对话模拟可用，也不代表内置浏览器提供语音识别。参考：[MDN 浏览器兼容性与在线识别说明](https://developer.mozilla.org/en-US/docs/Web/API/SpeechRecognition)、[MDN 错误类型](https://developer.mozilla.org/en-US/docs/Web/API/SpeechRecognitionErrorEvent/error)。
+
 ## 启动真实模型模式
 
 打开同目录的 `api-key.local.json`，把 `apiKey` 后面的空字符串改为你的 DeepSeek API Key，并保留两侧的英文双引号。`model` 使用 `deepseek-flash`，支持文字、照片和思考模式。这个文件只供本机服务端读取，已经加入 `.gitignore`，不会提交到 Git。不要把 Key 填进网页或聊天消息。

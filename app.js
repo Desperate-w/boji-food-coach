@@ -38,6 +38,7 @@
   function seedState() {
     return {
       view:'chat', historyDetail:null, expanded:false, menuOpen:false, modal:null, onboardStep:0, onboardingDraft:emptyDraft(), onboardingComplete:false, correctionTarget:null,
+      voiceStatus:'idle', voiceTranscript:'', voiceError:'',
       activeDate:dateKey(), archives:{},
       attachment:null, draft:'', currentFeedback:null, pending:null, requestError:null,
       connection:{mode:'checking', model:'', provider:''},
@@ -73,6 +74,7 @@
   let toastTimer;
   let thinkingTimer;
   let reasoningRenderTimer;
+  let voiceRecognition=null;
   function scheduleReasoningRender() {
     if (reasoningRenderTimer) return;
     reasoningRenderTimer=setTimeout(()=>{reasoningRenderTimer=null;if(state.pending) render();},120);
@@ -235,7 +237,11 @@
   }
   function renderModal() {
     if (!state.modal) return '';
-    if (state.modal==='voiceFallback') return `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="语音输入演示"><div class="modal-top"><div><div class="eyebrow">VOICE / 语音输入</div><h2>当前浏览器未提供语音识别</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><p>你仍可以用一条示例口述体验“说一句话就记下一顿”的交互。</p><div class="modal-bottom"><span></span><button class="primary-button" data-action="voice-example">插入示例口述</button></div></div></div>`;
+    if (state.modal==='voice') {
+      const busy=['starting','listening','processing'].includes(state.voiceStatus);
+      const status={idle:'准备好后点击“开始说话”',starting:'正在请求麦克风权限…',listening:'正在听，说完会自动发送',processing:'正在整理识别结果…',review:'已结束录音，可检查文字后发送',error:'这次语音识别没有完成',unsupported:'当前浏览器不支持语音识别'}[state.voiceStatus];
+      return `<div class="modal-backdrop"><div class="modal voice-modal" role="dialog" aria-modal="true" aria-label="语音输入"><div class="modal-top"><div><div class="eyebrow">VOICE / 语音输入</div><h2>说一句，就能记下来。</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><p>语音由浏览器识别，可能需要网络和麦克风权限。说完会自动发送；也可以点“结束录音”先检查文字。</p><div class="voice-status ${state.voiceStatus==='listening'?'recording':''}" role="status">${icon('mic')}<span>${status}</span></div>${state.voiceError?`<p class="voice-error" role="alert">${escapeHtml(state.voiceError)}</p>`:''}<label class="field voice-field">识别文字<textarea id="voice-transcript" rows="3" placeholder="识别后会出现在这里，也可以直接输入或修改" ${busy?'readonly':''}>${escapeHtml(state.voiceTranscript)}</textarea></label><div class="voice-actions"><button class="secondary-button" data-action="voice-type">改用文字输入</button>${state.voiceStatus==='unsupported'?'':`<button class="secondary-button" data-action="voice-toggle" ${state.voiceStatus==='processing'?'disabled':''}>${busy?'结束录音':'开始说话'}</button>`}<button class="primary-button" data-action="voice-use" ${state.voiceTranscript.trim()?'':'disabled'}>使用这段文字</button></div></div></div>`;
+    }
     if (state.modal!=='onboarding') return '';
     return renderSetup(true);
   }
@@ -465,7 +471,7 @@
     else if (action==='example') sendMessage(button.dataset.text);
     else if (action==='correct-meal') {state.correctionTarget=button.dataset.meal;state.draft='米饭其实只吃了一半';const input=document.getElementById('message-input'); if (input) {input.value=state.draft;input.focus();}}
     else if (action==='onboarding') {state.modal='onboarding';state.onboardStep=0;state.onboardingDraft=profileDraft(state.profile);render();}
-    else if (action==='close-modal') {state.modal=null;render();}
+    else if (action==='close-modal') {if (state.modal==='voice') cancelVoiceRecognition();state.modal=null;render();}
     else if (action==='onboard-back') {state.onboardStep=Math.max(0,state.onboardStep-1);render();}
     else if (action==='onboard-next') handleOnboardNext();
     else if (action==='select-goal') {state.onboardingDraft.goal=button.dataset.value;render();}
@@ -473,12 +479,22 @@
     else if (action==='select-training') {state.onboardingDraft.training=button.dataset.value;render();}
     else if (action==='select-activity') {state.onboardingDraft.activity=button.dataset.value;render();}
     else if (action==='voice-demo') startVoice();
-    else if (action==='voice-example') {state.modal=null;render();sendMessage('刚刚吃了两个蛋，两片吐司和一杯拿铁');}
+    else if (action==='voice-toggle') {
+      if (voiceRecognition) {state.voiceStatus='processing';try {voiceRecognition.stop();} catch {cancelVoiceRecognition();state.voiceStatus='error';state.voiceError='录音未能正常结束，请再试一次。';}render();}
+      else beginVoiceRecognition();
+    }
+    else if (action==='voice-type') {cancelVoiceRecognition();state.draft=[state.draft.trim(),state.voiceTranscript.trim()].filter(Boolean).join(' ');state.modal=null;render();requestAnimationFrame(()=>document.getElementById('message-input')?.focus());}
+    else if (action==='voice-use') {
+      const transcript=state.voiceTranscript.trim();if (!transcript) return;
+      cancelVoiceRecognition();state.draft=[state.draft.trim(),transcript].filter(Boolean).join(' ');
+      state.modal=null;render();requestAnimationFrame(()=>document.getElementById('message-input')?.focus());
+    }
     else if (action==='reset' && window.confirm('这会清空当前浏览器里的建档、饮食和交流记录。确定重新开始吗？')) {state=seedState();render();toast('已清空本机演示记录');}
   });
   document.addEventListener('submit', e => { if (e.target.id==='chat-form') {e.preventDefault();sendMessage(document.getElementById('message-input').value);} });
   document.addEventListener('input', e => {
     if (e.target.id==='message-input') state.draft=e.target.value;
+    if (e.target.id==='voice-transcript') {state.voiceTranscript=e.target.value;const use=document.querySelector('[data-action="voice-use"]');if (use) use.disabled=!state.voiceTranscript.trim();}
     const key={'ob-gender':'gender','ob-age':'age','ob-height':'height','ob-weight':'weight'}[e.target.id];
     if (key && state.onboardingDraft) {state.onboardingDraft[key]=e.target.value;persist();}
   });
@@ -516,14 +532,62 @@
       updateComposerPhoto(); toast('照片已添加，可以补充一句说明');
     } catch { toast('照片读取失败，请换一张试试'); }
   });
+  function voiceErrorMessage(code) {
+    const messages={
+      'not-allowed':'麦克风权限被拒绝。请在浏览器里允许此页面使用麦克风后重试。',
+      'service-not-allowed':'浏览器阻止了语音识别服务。请在支持语音识别的浏览器中打开本地服务地址。',
+      'audio-capture':'没有检测到可用的麦克风。请检查设备连接和系统麦克风权限。',
+      network:'语音识别服务暂时无法连接。检查网络后重试，或改用文字输入。',
+      'no-speech':'没有听到清晰语音。靠近麦克风，再试一次。',
+      'language-not-supported':'当前浏览器的语音识别不支持中文。请改用文字输入。',
+      aborted:'语音识别已中断，可以重试或改用文字输入。',
+    };
+    return messages[code]||'语音识别未完成。请重试；如果仍失败，请改用文字输入。';
+  }
+  function cancelVoiceRecognition() {
+    if (!voiceRecognition) return;
+    const recognition=voiceRecognition;voiceRecognition=null;
+    recognition.onstart=null;recognition.onresult=null;recognition.onerror=null;recognition.onend=null;
+    try {recognition.abort();} catch {}
+  }
   function startVoice() {
     state.menuOpen=false;
+    state.modal='voice';state.voiceTranscript='';state.voiceError='';
+    state.voiceStatus=window.SpeechRecognition||window.webkitSpeechRecognition?'idle':'unsupported';
+    if (state.voiceStatus==='unsupported') state.voiceError='当前浏览器没有提供语音识别。请用 Chrome 打开 npm start 显示的本地地址，或改用文字输入。';
+    render();
+    if (state.voiceStatus==='idle') beginVoiceRecognition();
+  }
+  function beginVoiceRecognition() {
+    cancelVoiceRecognition();
     const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-    if (!Recognition) {state.modal='voiceFallback';render();return;}
-    const recognition=new Recognition(); recognition.lang='zh-CN';recognition.interimResults=false;recognition.maxAlternatives=1;
-    recognition.onresult=e=>{const transcript=e.results[0][0].transcript;sendMessage(transcript);};
-    recognition.onerror=()=>toast('没有听清，可以再试一次或改用文字');
-    recognition.start();toast('正在听，请说出你吃了什么');
+    if (!Recognition) {state.voiceStatus='unsupported';state.voiceError=voiceErrorMessage('service-not-allowed');render();return;}
+    let recognition;
+    try {recognition=new Recognition();} catch {state.voiceStatus='error';state.voiceError='无法启动当前浏览器的语音识别。请改用文字输入。';render();return;}
+    voiceRecognition=recognition;
+    recognition.lang='zh-CN';recognition.continuous=false;recognition.interimResults=true;recognition.maxAlternatives=1;
+    recognition.onstart=()=>{if (voiceRecognition!==recognition) return;state.voiceStatus='listening';render();};
+    recognition.onresult=event=>{
+      if (voiceRecognition!==recognition) return;
+      state.voiceTranscript=Array.from(event.results).map(result=>result[0]?.transcript||'').join('').trim();
+      const input=document.getElementById('voice-transcript');if (input) input.value=state.voiceTranscript;
+      const use=document.querySelector('[data-action="voice-use"]');if (use) use.disabled=!state.voiceTranscript;
+    };
+    recognition.onerror=event=>{
+      if (voiceRecognition!==recognition) return;
+      state.voiceStatus='error';state.voiceError=voiceErrorMessage(event.error);render();
+    };
+    recognition.onend=()=>{
+      if (voiceRecognition!==recognition) return;
+      voiceRecognition=null;
+      if (state.modal!=='voice'||state.voiceStatus==='error') return;
+      if (!state.voiceTranscript) {state.voiceStatus='error';state.voiceError='没有识别到文字。请重试，或改用文字输入。';render();return;}
+      if (state.voiceStatus==='processing') {state.voiceStatus='review';render();return;}
+      state.modal=null;sendMessage(state.voiceTranscript);
+    };
+    state.voiceStatus='starting';state.voiceError='';
+    try {recognition.start();render();}
+    catch {voiceRecognition=null;state.voiceStatus='error';state.voiceError='浏览器未能启动麦克风。请检查麦克风权限，或改用文字输入。';render();}
   }
   async function checkConnection() {
     if (new URLSearchParams(window.location?.search||'').get('preview')==='1') {
