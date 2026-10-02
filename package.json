@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.2.0",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test nutrition.test.js"
   }
 }

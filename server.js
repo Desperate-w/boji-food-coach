@@ -299,7 +299,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
       return;
     }
 
-    const files = {'/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css']};
+    const files = {'/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/nutrition.js': ['nutrition.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css']};
     const file = files[req.url];
     if (req.method !== 'GET' || !file) { res.writeHead(404); res.end('Not found'); return; }
     try {
