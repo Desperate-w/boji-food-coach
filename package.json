@@ -1,0 +1,8 @@
+{
+  "name": "boji-food-coach-demo",
+  "private": true,
+  "version": "0.2.0",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
