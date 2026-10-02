@@ -32,7 +32,7 @@
       view:'chat', historyDetail:null, expanded:false, menuOpen:false, modal:null, onboardStep:0, correctionTarget:null,
       activeDate:dateKey(), archives:{},
       attachment:null, draft:'', currentFeedback:null, pending:null, requestError:null,
-      connection:{mode:'checking', model:''},
+      connection:{mode:'checking', model:'', provider:''},
       profile:{age:26, gender:'男', height:176, weight:68, goal:'减一点脂，让线条更明显', frequency:'每周 2–3 次', training:'力量训练', caloriesMin:2000, caloriesMax:2200, proteinTarget:135, strategy:'轻度减脂 · 保持肌肉'},
       meals:[
         {id:'meal-breakfast', type:'早餐', name:'吐司 · 鸡蛋 · 拿铁', calories:420, protein:28, carbs:45, fat:14, fiber:4, time:'08:12'},
@@ -57,6 +57,11 @@
   const photoInput = document.getElementById('photo-input');
   let toastTimer;
   let thinkingTimer;
+  let reasoningRenderTimer;
+  function scheduleReasoningRender() {
+    if (reasoningRenderTimer) return;
+    reasoningRenderTimer=setTimeout(()=>{reasoningRenderTimer=null;if(state.pending) render();},120);
+  }
 
   function persist() {
     const {view, historyDetail, expanded, activeDate, archives, profile, meals, messages} = state;
@@ -98,7 +103,7 @@
       <button class="recent-day" data-action="history-day" data-day="today">今天 · ${fmt(totals().calories)} kcal</button>
       <button class="recent-day" data-action="history-day" data-day="yesterday">昨天 · ${fmt(historyFor('yesterday').calories)} kcal</button>
       <button class="recent-day" data-action="history-day" data-day="before">前天 · ${fmt(historyFor('before').calories)} kcal</button>
-      <div class="sidebar-bottom"><button class="side-action" data-action="onboarding">${icon('spark')} 体验新用户引导</button><button class="side-action" data-action="reset">${icon('reset')} 重置演示</button><div class="demo-note">交互原型 · AI 与图片识别为本地模拟</div></div>
+      <div class="sidebar-bottom"><button class="side-action" data-action="onboarding">${icon('spark')} 体验新用户引导</button><button class="side-action" data-action="reset">${icon('reset')} 重置演示</button><div class="demo-note">${state.connection.mode==='live'?'交互原型 · DeepSeek 实时回复':'交互原型 · AI 与图片识别为本地模拟'}</div></div>
     </aside>`;
   }
   function navButton(view, glyph, text) { return `<button class="nav-button ${state.view===view?'active':''}" data-action="nav" data-view="${view}">${icon(glyph)}${text}</button>`; }
@@ -106,7 +111,7 @@
   function renderTopbar() {
     const title=state.view==='chat'?'今天':state.view==='history'?'饮食历史':'我的计划';
     const live=state.connection.mode==='live';
-    const badge=live?`<span class="demo-pill live-pill"><span class="status-dot"></span>${escapeHtml(state.connection.model)} · LLM</span>`:`<span class="demo-pill">${state.connection.mode==='checking'?'检查连接中':'本地演示'}</span>`;
+    const badge=live?`<span class="demo-pill live-pill"><span class="status-dot"></span>${escapeHtml(state.connection.provider||'LLM')} · ${escapeHtml(state.connection.model)}</span>`:`<span class="demo-pill">${state.connection.mode==='checking'?'检查连接中':'本地演示'}</span>`;
     return `<header class="topbar"><div class="topbar-title"><h1>${title}</h1><span class="topbar-date">${state.view==='chat'?todayLabel():'AI 薄肌饮食教练'}</span></div><div class="topbar-actions">${badge}${state.view==='chat'?`<button class="icon-button mobile-only" data-action="nav" data-view="history" aria-label="查看历史">${icon('calendar')}</button>`:''}</div></header>`;
   }
   function renderToday() {
@@ -132,10 +137,11 @@
   }
   function renderReasoning(m) {
     if (!m.live) return '';
-    const content=m.reasoningSummary
-      ? renderRichText(m.reasoningSummary)
-      : '<p>本次模型没有返回可展示的思考摘要。</p>';
-    return `<details class="reasoning-details"><summary>${m.elapsedSeconds!=null?`思考了 ${m.elapsedSeconds} 秒 · `:''}查看思考摘要 ${icon('down')}</summary><div class="reasoning-content">${content}<small>这是模型提供的摘要，并非逐字的内部推理。</small></div></details>`;
+    const legacySummary=!m.reasoningText&&Boolean(m.reasoningSummary);
+    const content=m.reasoningText||m.reasoningSummary
+      ? renderRichText(m.reasoningText||m.reasoningSummary)
+      : '<p>本次模型没有返回可展示的思考文本。</p>';
+    return `<details class="reasoning-details"><summary>${m.elapsedSeconds!=null?`思考了 ${m.elapsedSeconds} 秒 · `:''}查看${legacySummary?'思考摘要':'思考过程'} ${icon('down')}</summary><div class="reasoning-content">${content}<small>${legacySummary?'这是之前模型提供的思考摘要。':'这里显示 DeepSeek 本轮实际返回的思考文本。'}</small></div></details>`;
   }
   function renderMessage(m, showEdit=true) {
     if (m.role==='user') return `<article class="message user"><div class="user-bubble">${m.photoUrl?`<img class="user-photo" src="${escapeHtml(m.photoUrl)}" alt="上传的饮食照片">`:''}${escapeHtml(m.text||'上传了一张食物照片')}</div></article>`;
@@ -153,10 +159,8 @@
   function renderPending() {
     const pending=state.pending;
     const label=pending.phase==='composing'?'正在整理回答…':'模型正在思考…';
-    const summary=pending.summaryAvailable
-      ? `<button class="thinking-expand" data-action="toggle-pending-summary" aria-expanded="${pending.summaryOpen}">${pending.summary?'查看思考摘要':'思考摘要生成中'} ${icon('down')}</button>${pending.summaryOpen?`<div class="reasoning-content pending-summary">${pending.summary?renderRichText(pending.summary):'<p>模型尚未返回可展示的摘要。</p>'}</div>`:''}`
-      : '<div class="reasoning-unavailable">当前模型未提供思考摘要，回答仍会继续生成。</div>';
-    return `<section class="thinking-panel" aria-live="polite"><div class="thinking-row"><span class="thinking-pulse" aria-hidden="true"><i></i><i></i><i></i></span><strong>${label}</strong><span class="thinking-seconds" id="thinking-seconds">${Math.floor((Date.now()-pending.startedAt)/1000)} 秒</span></div><p>正在结合你的今日记录和目标给出建议。</p>${summary}</section>`;
+    const reasoning=`<button class="thinking-expand" data-action="toggle-pending-reasoning" aria-expanded="${pending.reasoningOpen}">${pending.reasoning?'查看思考过程':'思考过程生成中'} ${icon('down')}</button>${pending.reasoningOpen?`<div class="reasoning-content pending-summary">${pending.reasoning?renderRichText(pending.reasoning):'<p>模型尚未返回思考文本。</p>'}</div>`:''}`;
+    return `<section class="thinking-panel" aria-live="polite"><div class="thinking-row"><span class="thinking-pulse" aria-hidden="true"><i></i><i></i><i></i></span><strong>${label}</strong><span class="thinking-seconds" id="thinking-seconds">${Math.floor((Date.now()-pending.startedAt)/1000)} 秒</span></div><p>正在结合你的今日记录和目标给出建议。</p>${reasoning}</section>`;
   }
   function renderChat() {
     const response=state.pending?renderPending():state.requestError
@@ -295,8 +299,9 @@
       time:time||timeNow(), input:text,
     };
   }
-  function finishLiveTurn(turn, text, attachment, summary, summaryAvailable) {
+  function finishLiveTurn(turn, text, attachment, reasoning) {
     clearInterval(thinkingTimer);
+    clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
     const elapsedSeconds=Math.max(1,Math.round((Date.now()-state.pending.startedAt)/1000));
     let receipt=null, revised=false, reply=turn.reply;
     if (turn.action==='consumed' && turn.meal) {
@@ -311,7 +316,7 @@
       } else reply='我还不能确定要改哪一顿。请告诉我餐次或食物名称，我再帮你修正。';
     }
     state.messages.push({id:uid(),role:'user',text:text||'上传了一张食物照片',photoUrl:attachment?.url||null,time:timeNow()});
-    const assistantMessage={id:uid(),role:'assistant',text:reply,receipt,revised,time:timeNow(),live:true,reasoningSummary:summary||'',summaryAvailable,elapsedSeconds};
+    const assistantMessage={id:uid(),role:'assistant',text:reply,receipt,revised,time:timeNow(),live:true,reasoningText:reasoning||'',elapsedSeconds};
     state.messages.push(assistantMessage);
     state.currentFeedback=assistantMessage;
     state.pending=null; state.requestError=null; render(); scrollBottom();
@@ -319,7 +324,7 @@
   async function sendLiveMessage(rawText, attachment) {
     const text=rawText.trim();
     if (!text&&!attachment) return;
-    state.pending={phase:'thinking',summary:'',summaryOpen:false,summaryAvailable:true,text,startedAt:Date.now()};
+    state.pending={phase:'thinking',reasoning:'',reasoningOpen:false,text,startedAt:Date.now()};
     state.requestError=null;state.currentFeedback=null;state.menuOpen=false;
     state.draft='';state.attachment=null;render();scrollBottom();
     clearInterval(thinkingTimer);
@@ -334,27 +339,25 @@
         throw new Error(error.error||`服务暂时不可用（HTTP ${response.status}）`);
       }
       if (!response.body) throw new Error('浏览器没有收到模型的数据流');
-      let result=null,summary='',summaryAvailable=true;
+      let result=null,reasoning='';
       for await (const event of readAppEvents(response.body)) {
         if (event.type==='status') {
           state.pending.phase=event.data.phase||'thinking';
-          state.pending.summaryAvailable=event.data.summaryAvailable!==false;
-          summaryAvailable=state.pending.summaryAvailable;
           render();
-        } else if (event.type==='summary') {
-          summary=event.data.text||'';
-          state.pending.summary=summary;
-          render();
+        } else if (event.type==='reasoning') {
+          reasoning=event.data.text||'';
+          state.pending.reasoning=reasoning;
+          scheduleReasoningRender();
         } else if (event.type==='result') {
           result=event.data.result;
-          summary=event.data.summary||summary;
-          summaryAvailable=event.data.summaryAvailable!==false;
+          reasoning=event.data.reasoning||reasoning;
         } else if (event.type==='error') throw new Error(event.data.message||'模型生成失败');
       }
       if (!result) throw new Error('模型没有返回完整结果，请重试');
-      finishLiveTurn(result,text,attachment,summary,summaryAvailable);
+      finishLiveTurn(result,text,attachment,reasoning);
     } catch (error) {
       clearInterval(thinkingTimer);
+      clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
       state.pending=null;state.requestError=error.message||'连接失败，请重试';
       state.draft=text;state.attachment=attachment||null;render();
     }
@@ -423,7 +426,7 @@
     else if (action==='history-back') {state.historyDetail=null;render();}
     else if (action==='expand-today') {state.expanded=!state.expanded;render();}
     else if (action==='dismiss-feedback') {state.currentFeedback=null;render();}
-    else if (action==='toggle-pending-summary' && state.pending) {state.pending.summaryOpen=!state.pending.summaryOpen;render();}
+    else if (action==='toggle-pending-reasoning' && state.pending) {state.pending.reasoningOpen=!state.pending.reasoningOpen;render();}
     else if (action==='retry-live') sendMessage(state.draft,state.attachment);
     else if (action==='toggle-menu') {state.menuOpen=!state.menuOpen;document.getElementById('composer-menu')?.classList.toggle('open',state.menuOpen);button.setAttribute('aria-expanded',String(state.menuOpen));}
     else if (action==='open-photo') {state.menuOpen=false;document.getElementById('composer-menu')?.classList.remove('open');photoInput.click();}
@@ -485,14 +488,14 @@
   }
   async function checkConnection() {
     if (!/^https?:$/.test(window.location?.protocol||'')) {
-      state.connection={mode:'demo',model:''};render();return;
+      state.connection={mode:'demo',model:'',provider:''};render();return;
     }
     try {
       const response=await fetch('/api/health',{cache:'no-store'});
       if (!response.ok) throw new Error('服务未连接');
       const health=await response.json();
-      state.connection=health.configured?{mode:'live',model:health.model||'LLM'}:{mode:'demo',model:''};
-    } catch {state.connection={mode:'demo',model:''};}
+      state.connection=health.configured?{mode:'live',model:health.model||'LLM',provider:health.provider||'DeepSeek'}:{mode:'demo',model:'',provider:''};
+    } catch {state.connection={mode:'demo',model:'',provider:''};}
     render();
   }
   window.addEventListener?.('focus',()=>{if (ensureCurrentDay()) render();});

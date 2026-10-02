@@ -24,8 +24,8 @@ function readLocalConfig() {
 const localConfig = readLocalConfig();
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
-const MODEL = process.env.OPENAI_MODEL || localConfig.model?.trim() || 'gpt-6.1-sol';
-const API_KEY = process.env.OPENAI_API_KEY || localConfig.apiKey?.trim() || '';
+const MODEL = process.env.DEEPSEEK_MODEL || localConfig.model?.trim() || 'deepseek-flash';
+const API_KEY = process.env.DEEPSEEK_API_KEY || localConfig.apiKey?.trim() || '';
 
 const mealSchema = {
   type: 'object',
@@ -80,10 +80,11 @@ function extractOutputText(response) {
     .join('');
 }
 
-function extractSummary(response) {
+function extractReasoning(response) {
   return (response?.output || [])
     .filter(item => item.type === 'reasoning')
-    .flatMap(item => item.summary || [])
+    .flatMap(item => item.content || [])
+    .filter(part => part.type === 'reasoning_text')
     .map(part => part.text || '')
     .filter(Boolean)
     .join('\n\n');
@@ -189,9 +190,10 @@ function enforceRecordBoundary(result, text, hasImage) {
 }
 
 function apiErrorMessage(status, detail) {
-  if (status === 401) return 'API Key 无效，请检查本地服务端配置。';
-  if (status === 403) return '当前 API Key 无法使用所选模型，请调整 OPENAI_MODEL。';
-  if (status === 429) return 'API 额度或速率限制已触发，请稍后再试。';
+  if (status === 401) return 'DeepSeek API Key 无效，请检查本地配置。';
+  if (status === 402) return 'DeepSeek 账户余额不足，请查看平台用量与余额。';
+  if (status === 403 || status === 404) return '当前 Key 无法使用所选模型，请检查 DEEPSEEK_MODEL。';
+  if (status === 429) return 'DeepSeek 请求速率达到上限，请稍后再试。';
   return `模型请求失败（HTTP ${status}）${detail ? `：${detail.slice(0, 160)}` : ''}`;
 }
 
@@ -199,14 +201,14 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
   return http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/health') {
       res.writeHead(200, {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'});
-      res.end(JSON.stringify({configured: Boolean(apiKey), model}));
+      res.end(JSON.stringify({configured: Boolean(apiKey), model, provider: 'DeepSeek'}));
       return;
     }
 
     if (req.method === 'POST' && req.url === '/api/chat') {
       if (!apiKey) {
         res.writeHead(503, {'Content-Type': 'application/json; charset=utf-8'});
-        res.end(JSON.stringify({error: '未配置 OPENAI_API_KEY。'}));
+        res.end(JSON.stringify({error: '未配置 DeepSeek API Key。'}));
         return;
       }
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
@@ -225,35 +227,27 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
         }
         abort = new AbortController();
         res.on('close', () => abort.abort());
-        const request = (withSummary) => fetchImpl('https://api.openai.com/v1/responses', {
+        const upstream = await fetchImpl('https://api.deepseek.com/responses', {
           method: 'POST',
           headers: {'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json'},
           body: JSON.stringify({
-            model, instructions, input: buildInput(body), stream: true, store: false,
-            reasoning: withSummary ? {effort: 'low', summary: 'auto'} : {effort: 'low'},
-            max_output_tokens: 3000,
-            text: {format: {type: 'json_schema', name: 'nutrition_turn', strict: true, schema: turnSchema}},
+            model, instructions, input: buildInput(body), stream: true,
+            reasoning: {effort: 'low'},
+            max_output_tokens: 5000,
+            text: {format: {type: 'json_schema', name: 'nutrition_turn', schema: turnSchema}},
           }),
           signal: abort.signal,
         });
 
-        let upstream = await request(true);
-        let summaryAvailable = true;
         if (!upstream.ok) {
           const errorText = await upstream.text();
-          if (upstream.status === 400 && /summary|summari|verification/i.test(errorText)) {
-            summaryAvailable = false;
-            upstream = await request(false);
-          } else {
-            res.writeHead(upstream.status, {'Content-Type': 'application/json; charset=utf-8'});
-            res.end(JSON.stringify({error: apiErrorMessage(upstream.status, errorText)}));
-            return;
-          }
+          res.writeHead(upstream.status, {'Content-Type': 'application/json; charset=utf-8'});
+          res.end(JSON.stringify({error: apiErrorMessage(upstream.status, errorText)}));
+          return;
         }
-        if (!upstream.ok || !upstream.body) {
-          const detail = await upstream.text();
-          res.writeHead(upstream.status || 502, {'Content-Type': 'application/json; charset=utf-8'});
-          res.end(JSON.stringify({error: apiErrorMessage(upstream.status || 502, detail)}));
+        if (!upstream.body) {
+          res.writeHead(502, {'Content-Type': 'application/json; charset=utf-8'});
+          res.end(JSON.stringify({error: 'DeepSeek 没有返回数据流，请重试。'}));
           return;
         }
 
@@ -263,37 +257,36 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
           'Connection': 'keep-alive',
           'X-Content-Type-Options': 'nosniff',
         });
-        sendEvent(res, 'status', {phase: 'thinking', summaryAvailable});
+        sendEvent(res, 'status', {phase: 'thinking'});
 
         let outputText = '';
-        let summary = '';
+        let reasoning = '';
         let completed = false;
         let composing = false;
-        const summaryParts = new Map();
+        const reasoningParts = new Map();
         for await (const event of readSSE(upstream.body)) {
-          if (event.type === 'response.reasoning_summary_text.delta') {
-            const index = event.summary_index || 0;
-            summaryParts.set(index, (summaryParts.get(index) || '') + (event.delta || ''));
-            summary = [...summaryParts.values()].join('\n\n');
-            sendEvent(res, 'summary', {text: summary});
-          } else if (event.type === 'response.reasoning_summary_text.done') {
-            summaryParts.set(event.summary_index || 0, event.text || '');
-            summary = [...summaryParts.values()].join('\n\n');
-            sendEvent(res, 'summary', {text: summary});
+          if (event.type === 'response.reasoning_text.delta' || event.type === 'response.reasoning_text.done') {
+            const key = `${event.output_index ?? 0}:${event.content_index ?? 0}`;
+            const current = reasoningParts.get(key) || '';
+            reasoningParts.set(key, event.type.endsWith('.done') ? (event.text || current) : current + (event.delta || ''));
+            reasoning = [...reasoningParts.values()].join('\n\n');
+            sendEvent(res, 'reasoning', {text: reasoning});
           } else if (event.type === 'response.output_text.delta') {
             outputText += event.delta || '';
-            if (!composing) {composing = true; sendEvent(res, 'status', {phase: 'composing', summaryAvailable});}
+            if (!composing) {composing = true; sendEvent(res, 'status', {phase: 'composing'});}
           } else if (event.type === 'response.completed') {
             completed = true;
             outputText ||= extractOutputText(event.response);
-            summary ||= extractSummary(event.response);
+            reasoning ||= extractReasoning(event.response);
+          } else if (event.type === 'response.incomplete') {
+            throw new Error('模型输出被截断，请缩短输入后重试。');
           } else if (event.type === 'response.failed' || event.type === 'error') {
             throw new Error(event.response?.error?.message || event.message || '模型生成失败');
           }
         }
         if (!completed) throw new Error('模型连接中断，请重试');
         const result = enforceRecordBoundary(validateResult(JSON.parse(outputText)), body.text, Boolean(body.image));
-        sendEvent(res, 'result', {result, summary, summaryAvailable});
+        sendEvent(res, 'result', {result, reasoning});
         res.end();
       } catch (error) {
         if (res.writableEnded || abort?.signal.aborted) return;
