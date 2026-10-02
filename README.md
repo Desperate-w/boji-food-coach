@@ -2,6 +2,8 @@
 
 这是一个本地前端 Demo。直接打开 `index.html` 时使用本地模拟回复；通过本地服务并配置 DeepSeek API Key 后，输入、照片和咨询会由 DeepSeek 处理。
 
+后续开发以 [产品设计文档.md](./产品设计文档.md) 和 [开发计划.md](./开发计划.md) 为依据，按计划中的 M0–M5 阶段推进。
+
 ## 启动真实模型模式
 
 打开同目录的 `api-key.local.json`，把 `apiKey` 后面的空字符串改为你的 DeepSeek API Key，并保留两侧的英文双引号。`model` 使用 `deepseek-flash`，支持文字、照片和思考模式。这个文件只供本机服务端读取，已经加入 `.gitignore`，不会提交到 Git。不要把 Key 填进网页或聊天消息。
