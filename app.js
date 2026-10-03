@@ -42,6 +42,7 @@
       activeDate:dateKey(), archives:{},
       attachment:null, draft:'', currentFeedback:null, pending:null, requestError:null,
       connection:{mode:'checking', model:'', provider:''},
+      serverToday:null, retryRequestId:null, retrySource:null, importBackup:null, memories:[], memoryDraft:'', memoryEditId:null,
       profile:null, meals:[], messages:[],
     };
   }
@@ -71,21 +72,25 @@
   } catch { state = seedState(); }
   const app = document.getElementById('app');
   const photoInput = document.getElementById('photo-input');
+  const backupInput = document.getElementById('backup-input');
   let toastTimer;
   let thinkingTimer;
   let reasoningRenderTimer;
   let voiceRecognition=null;
+  let liveController=null;
   function scheduleReasoningRender() {
     if (reasoningRenderTimer) return;
     reasoningRenderTimer=setTimeout(()=>{reasoningRenderTimer=null;if(state.pending) render();},120);
   }
 
   function persist() {
+    if (state.connection.mode==='live') return;
     const {view, historyDetail, expanded, activeDate, archives, profile, onboardingComplete, onboardingDraft, meals, messages} = state;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({view, historyDetail, expanded, activeDate, archives, profile, onboardingComplete, onboardingDraft, meals, messages})); } catch {}
   }
-  function totals() { return state.meals.reduce((a, meal) => ({calories:a.calories+meal.calories, protein:a.protein+meal.protein, carbs:a.carbs+(meal.carbs||0), fat:a.fat+(meal.fat||0), fiber:a.fiber+(meal.fiber||0)}), {calories:0, protein:0, carbs:0, fat:0, fiber:0}); }
+  function totals() { if (state.connection.mode==='live'&&state.serverToday) return state.serverToday; return state.meals.reduce((a, meal) => ({calories:a.calories+meal.calories, protein:a.protein+meal.protein, carbs:a.carbs+(meal.carbs||0), fat:a.fat+(meal.fat||0), fiber:a.fiber+(meal.fiber||0)}), {calories:0, protein:0, carbs:0, fat:0, fiber:0}); }
   function status() {
+    if (state.connection.mode==='live'&&state.serverToday) return state.serverToday.status;
     const t=totals(), p=state.profile;
     if (!t.calories && !state.meals.length) return '待记录';
     if (t.calories > p.caloriesMax + 150) return '略高于建议';
@@ -94,6 +99,7 @@
     return '目前节奏合适';
   }
   function advice() {
+    if (state.connection.mode==='live'&&state.serverToday) return state.serverToday.advice;
     const t=totals(), p=state.profile, gap=Math.max(0, p.proteinTarget-t.protein);
     if (!state.meals.length) return '今天还没有饮食记录。吃完告诉我，就从第一顿开始。';
     if (t.calories > p.caloriesMax+150) return '今天热量已略高，接下来正常吃即可，不必刻意补偿。';
@@ -102,6 +108,7 @@
     return `今天蛋白质还差约 ${Math.round(gap/5)*5}g，下一顿优先选高蛋白主菜。`;
   }
   function ensureCurrentDay() {
+    if (state.connection.mode==='live') return false;
     const current=dateKey();
     state.archives ||= {};
     if (!state.activeDate) {state.activeDate=current;return false;}
@@ -122,7 +129,7 @@
       <div class="side-divider"></div><div class="side-label">最近记录</div>
       ${state.meals.length||state.messages.length?`<button class="recent-day" data-action="history-day" data-day="today">今天 · ${fmt(totals().calories)} kcal</button>`:'<div class="recent-day recent-empty">还没有记录</div>'}
       ${recent.map(day=>`<button class="recent-day" data-action="history-day" data-day="${day}">${day.slice(5).replace('-','月')}日 · ${fmt(state.archives[day].calories)} kcal</button>`).join('')}
-      <div class="sidebar-bottom"><button class="side-action" data-action="onboarding">${icon('spark')} 调整我的计划</button><button class="side-action" data-action="reset">${icon('reset')} 重新体验建档</button><div class="demo-note">计划估算在本机计算；${state.connection.mode==='live'?'对话由 DeepSeek 回复':'对话与图片识别为本地模拟'}</div></div>
+      <div class="sidebar-bottom"><button class="side-action" data-action="onboarding">${icon('spark')} 调整我的计划</button><button class="side-action" data-action="export-backup">${icon('calendar')} 导出我的记录</button>${state.connection.mode==='live'?'<button class="side-action" data-action="import-backup">导入旧版记录</button>':`<button class="side-action" data-action="reset">${icon('reset')} 重新体验建档</button>`}<div class="demo-note">${state.connection.mode==='live'?'资料和记录保存在本机服务；文字由 DeepSeek V4 Pro 处理，照片先由 Flash 识别':state.connection.mode==='unavailable'?'本地服务不可用，请刷新页面重试':'对话与图片识别为本地模拟'}</div></div>
     </aside>`;
   }
   function navButton(view, glyph, text) { return `<button class="nav-button ${state.view===view?'active':''}" data-action="nav" data-view="${view}">${icon(glyph)}${text}</button>`; }
@@ -130,7 +137,7 @@
   function renderTopbar() {
     const title=state.view==='chat'?'今天':state.view==='history'?'饮食历史':'我的计划';
     const live=state.connection.mode==='live';
-    const badge=live?`<span class="demo-pill live-pill"><span class="status-dot"></span>${escapeHtml(state.connection.provider||'LLM')} · ${escapeHtml(state.connection.model)}</span>`:`<span class="demo-pill">${state.connection.mode==='checking'?'检查连接中':state.connection.mode==='preview'?'前端预览 · 对话模拟':'本地演示'}</span>`;
+    const badge=live?`<span class="demo-pill live-pill"><span class="status-dot"></span>${escapeHtml(state.connection.provider||'LLM')} · ${escapeHtml(state.connection.model)}</span>`:`<span class="demo-pill">${state.connection.mode==='checking'?'检查连接中':state.connection.mode==='unavailable'?'本地服务不可用':state.connection.mode==='preview'?'前端预览 · 对话模拟':'本地演示'}</span>`;
     return `<header class="topbar"><div class="topbar-title"><h1>${title}</h1><span class="topbar-date">${state.view==='chat'?todayLabel():'AI 薄肌饮食教练'}</span></div><div class="topbar-actions">${badge}${state.view==='chat'?`<button class="icon-button mobile-only" data-action="nav" data-view="history" aria-label="查看历史">${icon('calendar')}</button>`:''}</div></header>`;
   }
   function renderToday() {
@@ -150,7 +157,7 @@
   function renderReceipt(r, revised=false, showEdit=true) {
     return `<div class="receipt"><div class="receipt-top"><div><div class="receipt-label">${icon('check')}${revised?'已更新':'已记录'}${escapeHtml(r.type)}</div><div class="receipt-title">${escapeHtml(r.name)}</div></div><div class="receipt-time">${escapeHtml(r.time||'刚刚')}</div></div>
       <div class="receipt-values"><div><div class="receipt-value">${r.min?`${fmt(r.min)}–${fmt(r.max)}`:`约 ${fmt(r.calories)}`}<small>kcal</small></div></div><div><div class="receipt-value">约 ${fmt(r.protein)}<small>g 蛋白质</small></div></div></div>
-      <div class="receipt-foot"><span>营养数据为估算值</span>${showEdit?`<button class="text-button" data-action="correct-meal" data-meal="${escapeHtml(r.id)}">修正这顿</button>`:''}</div></div>`;
+      <div class="receipt-foot"><span>${r.importedDemo?'旧版演示估算，建议核对':'营养数据为估算值'}</span>${showEdit?`<button class="text-button" data-action="correct-meal" data-meal="${escapeHtml(r.id)}">修正这顿</button>`:''}</div></div>`;
   }
   function renderRichText(value) {
     const inline=text=>escapeHtml(text).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>');
@@ -165,14 +172,14 @@
     return `<details class="reasoning-details"><summary>${m.elapsedSeconds!=null?`思考了 ${m.elapsedSeconds} 秒 · `:''}查看${legacySummary?'思考摘要':'思考过程'} ${icon('down')}</summary><div class="reasoning-content">${content}<small>${legacySummary?'这是之前模型提供的思考摘要。':'这里显示 DeepSeek 本轮实际返回的思考文本。'}</small></div></details>`;
   }
   function renderMessage(m, showEdit=true) {
-    if (m.role==='user') return `<article class="message user"><div class="user-bubble">${m.photoUrl?`<img class="user-photo" src="${escapeHtml(m.photoUrl)}" alt="上传的饮食照片">`:''}${escapeHtml(m.text||'上传了一张食物照片')}</div></article>`;
+    if (m.role==='user') return `<article class="message user"><div class="user-bubble">${m.photoUrl?`<img class="user-photo" src="${escapeHtml(m.photoUrl)}" alt="上传的饮食照片">${state.connection.mode==='live'&&/^\/api\/media\/[a-f0-9-]{36}$/.test(m.photoUrl)?`<button class="photo-delete" data-action="delete-photo" data-id="${m.photoUrl.slice('/api/media/'.length)}">删除这张照片</button>`:''}`:''}${escapeHtml(m.text||'上传了一张食物照片')}</div></article>`;
     return `<article class="message assistant"><div class="assistant-message"><div class="assistant-avatar">${icon('spark')}</div><div class="assistant-body">${renderRichText(m.text)}${m.receipt?renderReceipt(m.receipt,m.revised,showEdit):''}${m.after?renderRichText(m.after):''}${renderReasoning(m)}<div class="message-meta">${escapeHtml(m.time||'刚刚')}</div></div></div></article>`;
   }
   function renderComposer() {
     const disabled=state.pending?'disabled':'';
     const hint=state.connection.mode==='live'
       ? `由 ${escapeHtml(state.connection.model)} 回复；营养数据仍是估算值`
-      : state.connection.mode==='preview'?'对话为本地模拟；个人计划按填写资料实时估算':'当前为本地模拟回复；启动服务并配置 API Key 后可体验真实模型';
+      : state.connection.mode==='unavailable'?'无法连接本地服务；刷新页面重试':state.connection.mode==='preview'?'对话为本地模拟；个人计划按填写资料实时估算':'当前为本地模拟回复；启动服务并配置 API Key 后可体验真实模型';
     return `<div class="composer-wrap"><div class="composer-inner"><div class="composer-menu ${state.menuOpen?'open':''}" id="composer-menu"><button data-action="open-photo">${icon('camera')} 拍照或选择照片</button><button data-action="voice-demo">${icon('mic')} 语音输入</button></div>
       <div class="attachment-preview ${state.attachment?'visible':''}">${state.attachment?`<img src="${escapeHtml(state.attachment.url)}" alt="待发送照片"><span>照片已添加</span><button data-action="remove-photo" aria-label="移除照片">${icon('close')}</button>`:''}</div>
       <form class="composer" id="chat-form"><button class="composer-button" type="button" data-action="toggle-menu" aria-label="添加照片或语音" aria-expanded="${state.menuOpen}" ${disabled}>${icon('plus')}</button><textarea id="message-input" rows="1" placeholder="说说吃了什么，或问我怎么吃…" aria-label="输入消息" ${disabled}>${escapeHtml(state.draft||'')}</textarea><button class="composer-button" type="button" data-action="voice-demo" aria-label="语音输入" ${disabled}>${icon('mic')}</button><button class="composer-button send" type="submit" aria-label="发送消息" ${disabled}>${icon('send')}</button></form><div class="composer-hint">${hint}</div></div></div>`;
@@ -181,7 +188,7 @@
     const pending=state.pending;
     const label=pending.phase==='composing'?'正在整理回答…':'模型正在思考…';
     const reasoning=`<button class="thinking-expand" data-action="toggle-pending-reasoning" aria-expanded="${pending.reasoningOpen}">${pending.reasoning?'查看思考过程':'思考过程生成中'} ${icon('down')}</button>${pending.reasoningOpen?`<div class="reasoning-content pending-summary">${pending.reasoning?renderRichText(pending.reasoning):'<p>模型尚未返回思考文本。</p>'}</div>`:''}`;
-    return `<section class="thinking-panel" aria-live="polite"><div class="thinking-row"><span class="thinking-pulse" aria-hidden="true"><i></i><i></i><i></i></span><strong>${label}</strong><span class="thinking-seconds" id="thinking-seconds">${Math.floor((Date.now()-pending.startedAt)/1000)} 秒</span></div><p>正在结合你的今日记录和目标给出建议。</p>${reasoning}</section>`;
+    return `<section class="thinking-panel" aria-live="polite"><div class="thinking-row"><span class="thinking-pulse" aria-hidden="true"><i></i><i></i><i></i></span><strong>${label}</strong><span class="thinking-seconds" id="thinking-seconds">${Math.floor((Date.now()-pending.startedAt)/1000)} 秒</span></div><p>正在结合你的今日记录和目标给出建议。</p>${reasoning}<button class="stop-live" data-action="stop-live">停止生成</button></section>`;
   }
   function renderChat() {
     const response=state.pending?renderPending():state.requestError
@@ -194,27 +201,31 @@
 
   function historyFor(day) {
     if (day==='today') {
-      const t=totals();return {title:'今天',day:String(new Date().getDate()),month:`${new Date().getMonth()+1}月`,calories:t.calories,protein:t.protein,status:status(),summary:advice(),meals:state.meals.map(m=>[m.type,m.name,m.calories,m.protein]),messages:state.messages};
+      const t=totals();return {title:'今天',day:String(new Date().getDate()),month:`${new Date().getMonth()+1}月`,calories:t.calories,protein:t.protein,status:status(),summary:advice(),meals:state.meals.map(m=>[m.type,m.name,m.calories,m.protein,m.id]),messages:state.messages};
     }
     const date=new Date(`${day}T12:00:00`);
     const archived=state.archives?.[dateKey(date)];
     const title=`${date.getMonth()+1}月${date.getDate()}日`;
-    return {title,day:String(date.getDate()),month:`${date.getMonth()+1}月`,calories:archived.calories,protein:archived.protein,status:archived.status,summary:archived.summary,meals:archived.meals.map(m=>[m.type,m.name,m.calories,m.protein]),messages:archived.messages||[]};
+    return {title,day:String(date.getDate()),month:`${date.getMonth()+1}月`,calories:archived.calories,protein:archived.protein,status:archived.status,summary:archived.summary,meals:archived.meals.map(m=>[m.type,m.name,m.calories,m.protein,m.id]),messages:archived.messages||[]};
   }
   function renderHistoryDetail() {
     const d=historyFor(state.historyDetail);
     const conversation=d.messages.length
-      ? `<section class="history-conversation"><div class="eyebrow">CONVERSATION / 当天交流</div><div class="message-list">${d.messages.map(m=>renderMessage(m,false)).join('')}</div></section>` : '';
-    return `<div class="history-detail"><button class="back-button" data-action="history-back">${icon('arrowLeft')} 返回历史</button><h2>${d.title}的饮食</h2><p>${d.status} · ${d.meals.length} 条饮食记录${conversation?` · ${d.messages.length} 条交流`:''}</p><div class="history-summary"><div><strong>${fmt(d.calories)}</strong><span>kcal</span></div><div><strong>${fmt(d.protein)}</strong><span>g 蛋白质</span></div></div><div class="eyebrow">MEALS / 当天餐次</div>${d.meals.map(m=>`<div class="meal-row"><div><strong>${escapeHtml(m[0])} · ${escapeHtml(m[1])}</strong><small>蛋白质约 ${fmt(m[3])}g</small></div><span>约 ${fmt(m[2])} kcal</span></div>`).join('')}<div class="history-ai">${icon('spark')}　${escapeHtml(d.summary)}</div>${conversation}</div>`;
+      ? `<section class="history-conversation"><div class="eyebrow">CONVERSATION / 当天交流</div><div class="message-list">${d.messages.map(m=>renderMessage(m,state.connection.mode==='live')).join('')}</div></section>` : '';
+    return `<div class="history-detail"><button class="back-button" data-action="history-back">${icon('arrowLeft')} 返回历史</button><h2>${d.title}的饮食</h2><p>${d.status} · ${d.meals.length} 条饮食记录${conversation?` · ${d.messages.length} 条交流`:''}</p><div class="history-summary"><div><strong>${fmt(d.calories)}</strong><span>kcal</span></div><div><strong>${fmt(d.protein)}</strong><span>g 蛋白质</span></div></div><div class="eyebrow">MEALS / 当天餐次</div>${d.meals.map(m=>`<div class="meal-row"><div><strong>${escapeHtml(m[0])} · ${escapeHtml(m[1])}</strong><small>蛋白质约 ${fmt(m[3])}g</small></div><span>约 ${fmt(m[2])} kcal${state.connection.mode==='live'?` <button class="text-button" data-action="correct-meal" data-meal="${escapeHtml(m[4])}">修正</button>`:''}</span></div>`).join('')}<div class="history-ai">${icon('spark')}　${escapeHtml(d.summary)}</div>${conversation}</div>`;
   }
   function renderHistory() {
     if (state.historyDetail && state.historyDetail!=='today' && !state.archives?.[state.historyDetail]) state.historyDetail=null;
     const entries=[...(state.meals.length||state.messages.length?['today']:[]),...Object.keys(state.archives||{}).sort().reverse()];
     return `<div class="page">${renderTopbar()}<main class="section-page"><div class="section-inner"><div class="page-heading"><div class="eyebrow">YOUR DAYS / 饮食历史</div><h1>每天都更了解自己一点。</h1><p>回看每一天吃了什么，也能找到当天的交流记录。</p></div>${state.historyDetail?renderHistoryDetail():entries.length?`<div class="history-list">${entries.map(day=>{const d=historyFor(day);return `<button class="history-card" data-action="history-day" data-day="${day}"><span class="history-date"><strong>${d.day}</strong><span>${d.month}</span></span><span class="history-info"><strong>${d.title} <span class="status-badge"><span class="status-dot"></span>${d.status}</span></strong><small>${fmt(d.calories)} kcal　·　蛋白质 ${fmt(d.protein)}g　·　${d.meals.length} 餐${d.messages.length?`　·　${d.messages.length} 条交流`:''}</small></span>${icon('chevron')}</button>`}).join('')}</div>`:`<div class="history-empty">${icon('calendar')}<h2>还没有饮食历史</h2><p>记录一顿饭或发起一次咨询后，可以在这里回看。</p><button class="primary-button" data-action="nav" data-view="chat">去今天看看</button></div>`}</div></main></div>`;
   }
+  function renderProfileMemories() {
+    if (state.connection.mode!=='live') return '';
+    return `<section class="profile-card memory-section"><div class="memory-heading"><div><div class="eyebrow">HABITS / 长期习惯</div><h3>让建议更了解你</h3></div><button class="secondary-button" data-action="memory-open">添加习惯</button></div><p>只保存你明确要长期记住的饮食习惯；单次份量修正不会变成偏好。</p>${state.memories.length?`<div class="memory-list">${state.memories.map(memory=>`<div class="memory-row"><span>${escapeHtml(memory.text)}</span><div><button class="text-button" data-action="memory-open" data-id="${memory.id}">编辑</button><button class="text-button" data-action="memory-delete" data-id="${memory.id}">删除</button></div></div>`).join('')}</div>`:'<p>还没有保存的长期习惯。</p>'}</section>`;
+  }
   function renderProfile() {
     const p=state.profile;
-    return `<div class="page">${renderTopbar()}<main class="section-page"><div class="section-inner"><div class="page-heading"><div class="eyebrow">YOUR PLAN / 我的计划</div><h1>你的饮食起点。</h1><p>这些数字由你填写的资料估算；身体和训练习惯变化时，可以随时更新。</p></div><div class="profile-hero"><div class="eyebrow">CURRENT STRATEGY / 当前策略</div><h2>${escapeHtml(p.strategy)}</h2><p>${escapeHtml(p.explanation)} 你负责记录吃了什么，薄肌帮你整理今天的进度。</p></div><div class="profile-grid"><div class="profile-card"><h3>每日建议</h3><dl><div><dt>热量范围</dt><dd>${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal</dd></div><div><dt>蛋白质目标</dt><dd>约 ${fmt(p.proteinTarget)}g</dd></div><div><dt>碳水 / 脂肪</dt><dd>约 ${fmt(p.carbsTarget)}g / ${fmt(p.fatTarget)}g</dd></div><div><dt>当前目标</dt><dd>${escapeHtml(p.goal)}</dd></div></dl></div><div class="profile-card"><h3>身体与训练</h3><dl><div><dt>基础信息</dt><dd>${escapeHtml(p.gender)} · ${p.age} 岁</dd></div><div><dt>身高 / 体重</dt><dd>${p.height} cm / ${p.weight} kg</dd></div><div><dt>训练频率</dt><dd>${escapeHtml(p.frequency)}</dd></div><div><dt>训练类型</dt><dd>${escapeHtml(p.training)}</dd></div><div><dt>日常活动</dt><dd>${escapeHtml(p.activityLabel)}</dd></div></dl></div></div><div class="estimate-note"><strong>这些建议怎样得来</strong><div class="estimate-steps"><span>静息消耗 ${fmt(p.bmrMin)}${p.isRange?`–${fmt(p.bmrMax)}`:''} kcal</span>${icon('chevron')}<span>维持消耗 ${fmt(p.maintenanceMin)}${p.isRange?`–${fmt(p.maintenanceMax)}`:''} kcal</span>${icon('chevron')}<span>按目标调整</span></div><p>静息消耗使用成人 Mifflin–St Jeor 公式估算；活动量和目标再用于计算每日建议。结果不是实测值，也不适用于未成年人、孕哺期或需要特殊饮食管理的人。</p></div><button class="profile-action" data-action="onboarding">更新身体信息与目标</button></div></main></div>`;
+    return `<div class="page">${renderTopbar()}<main class="section-page"><div class="section-inner"><div class="page-heading"><div class="eyebrow">YOUR PLAN / 我的计划</div><h1>你的饮食起点。</h1><p>这些数字由你填写的资料估算；身体和训练习惯变化时，可以随时更新。</p></div><div class="profile-hero"><div class="eyebrow">CURRENT STRATEGY / 当前策略</div><h2>${escapeHtml(p.strategy)}</h2><p>${escapeHtml(p.explanation)} 你负责记录吃了什么，薄肌帮你整理今天的进度。</p></div><div class="profile-grid"><div class="profile-card"><h3>每日建议</h3><dl><div><dt>热量范围</dt><dd>${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal</dd></div><div><dt>蛋白质目标</dt><dd>约 ${fmt(p.proteinTarget)}g</dd></div><div><dt>碳水 / 脂肪</dt><dd>约 ${fmt(p.carbsTarget)}g / ${fmt(p.fatTarget)}g</dd></div><div><dt>当前目标</dt><dd>${escapeHtml(p.goal)}</dd></div></dl></div><div class="profile-card"><h3>身体与训练</h3><dl><div><dt>基础信息</dt><dd>${escapeHtml(p.gender)} · ${p.age} 岁</dd></div><div><dt>身高 / 体重</dt><dd>${p.height} cm / ${p.weight} kg</dd></div><div><dt>训练频率</dt><dd>${escapeHtml(p.frequency)}</dd></div><div><dt>训练类型</dt><dd>${escapeHtml(p.training)}</dd></div><div><dt>日常活动</dt><dd>${escapeHtml(p.activityLabel)}</dd></div></dl></div></div><div class="estimate-note"><strong>这些建议怎样得来</strong><div class="estimate-steps"><span>静息消耗 ${fmt(p.bmrMin)}${p.isRange?`–${fmt(p.bmrMax)}`:''} kcal</span>${icon('chevron')}<span>维持消耗 ${fmt(p.maintenanceMin)}${p.isRange?`–${fmt(p.maintenanceMax)}`:''} kcal</span>${icon('chevron')}<span>按目标调整</span></div><p>静息消耗使用成人 Mifflin–St Jeor 公式估算；活动量和目标再用于计算每日建议。结果不是实测值，也不适用于未成年人、孕哺期或需要特殊饮食管理的人。</p></div><button class="profile-action" data-action="onboarding">更新身体信息与目标</button><div class="profile-data-actions"><button class="secondary-button" data-action="export-backup">导出记录备份</button>${state.connection.mode==='live'?'<button class="secondary-button" data-action="import-backup">导入旧版记录</button>':''}</div>${renderProfileMemories()}</div></main></div>`;
   }
   function setupOption(action,value,label,selected,description='') {
     return `<button type="button" class="option ${selected?'selected':''}" data-action="${action}" data-value="${escapeHtml(value)}" aria-pressed="${selected}"><strong>${escapeHtml(label)}</strong>${description?`<small>${escapeHtml(description)}</small>`:''}</button>`;
@@ -233,10 +244,12 @@
     }
     const card=`<div class="setup-card"><div class="setup-card-top"><span class="eyebrow">YOUR STARTING POINT / 建立计划</span>${overlay?`<button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>`:''}</div><div class="setup-progress" aria-label="建档进度">${progress.map((label,index)=>`<div class="${index===s?'active':index<s?'done':''}"><i>${index<s?icon('check'):index+1}</i><span>${label}</span></div>`).join('')}</div><div class="setup-content"><h2>${titles[s]}</h2><p class="setup-intro">${['用 1 分钟建立适合你的饮食起点。','选一个当前方向，之后随时可以调整。','让估算更接近你的真实生活。','先看清数字的来路，再开始记录。'][s]}</p>${content}</div><div class="setup-actions">${s>0?`<button class="secondary-button" data-action="onboard-back">上一步</button>`:'<span></span>'}<button class="primary-button" data-action="onboard-next">${s===3?(overlay?'保存新计划':'开始记录'):s===2?'查看我的计划':'继续'} ${icon('chevron')}</button></div></div>`;
     if (overlay) return `<div class="modal-backdrop setup-overlay" role="dialog" aria-modal="true" aria-label="更新饮食计划">${card}</div>`;
-    return `<main class="setup-shell"><aside class="setup-aside"><div class="setup-brand"><div class="brand-mark">${icon('spark')}</div><strong>薄肌</strong></div><div class="setup-aside-copy"><div class="eyebrow">FOOD COACH / 饮食教练</div><h1>先了解你，<br>再谈怎么吃。</h1><p>从身体信息与活动习惯出发，给你一份能看懂、能随时调整的饮食起点。</p></div><div class="setup-aside-foot">身体信息只保存在当前浏览器的演示记录中。</div></aside>${card}<div class="toast" id="toast" role="status"></div></main>`;
+    return `<main class="setup-shell"><aside class="setup-aside"><div class="setup-brand"><div class="brand-mark">${icon('spark')}</div><strong>薄肌</strong></div><div class="setup-aside-copy"><div class="eyebrow">FOOD COACH / 饮食教练</div><h1>先了解你，<br>再谈怎么吃。</h1><p>从身体信息与活动习惯出发，给你一份能看懂、能随时调整的饮食起点。</p></div><div class="setup-aside-foot">${state.connection.mode==='live'?'身体信息和记录只保存在本机服务中。':'身体信息只保存在当前浏览器的演示记录中。'} <button class="setup-export" data-action="export-backup">导出旧记录</button>${state.connection.mode==='live'?'<button class="setup-export" data-action="import-backup">导入旧记录</button>':''}</div></aside>${card}<div class="toast" id="toast" role="status"></div></main>`;
   }
   function renderModal() {
     if (!state.modal) return '';
+    if (state.modal==='memory') return `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="编辑长期习惯"><div class="modal-top"><div><div class="eyebrow">HABIT / 长期习惯</div><h2>${state.memoryEditId?'修改习惯':'添加习惯'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><label class="field voice-field">饮食习惯<textarea id="memory-text" maxlength="200" rows="3" placeholder="例如：平时喝无糖拿铁">${escapeHtml(state.memoryDraft)}</textarea></label><div class="voice-actions"><button class="primary-button" data-action="memory-save">保存习惯</button></div></div></div>`;
+    if (state.modal==='import') return `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="导入旧记录"><div class="modal-top"><div><div class="eyebrow">IMPORT / 导入记录</div><h2>选择要迁入的内容</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><p>旧版餐食是演示估算，导入后会标注来源，不会覆盖现有记录。文件：${escapeHtml(state.importBackup?.fileName||'')}</p><div class="voice-actions"><button class="secondary-button" data-action="import-select" data-mode="profile">仅身体资料</button><button class="secondary-button" data-action="import-select" data-mode="records">仅饮食与交流</button><button class="primary-button" data-action="import-select" data-mode="all">全部导入</button></div></div></div>`;
     if (state.modal==='voice') {
       const busy=['starting','listening','processing'].includes(state.voiceStatus);
       const status={idle:'准备好后点击“开始说话”',starting:'正在请求麦克风权限…',listening:'正在听，说完会自动发送',processing:'正在整理识别结果…',review:'已结束录音，可检查文字后发送',error:'这次语音识别没有完成',unsupported:'当前浏览器不支持语音识别'}[state.voiceStatus];
@@ -248,7 +261,7 @@
   function render() {
     app.innerHTML=state.onboardingComplete
       ? `<div class="app-shell">${renderSidebar()}<div class="main">${state.view==='chat'?renderChat():state.view==='history'?renderHistory():renderProfile()}</div></div>${renderMobileNav()}${renderModal()}<div class="toast" id="toast" role="status"></div>`
-      : renderSetup();
+      : renderSetup()+(state.modal==='import'?renderModal():'');
     persist();
   }
   function toast(message) {
@@ -258,6 +271,29 @@
   }
   function scrollBottom() { requestAnimationFrame(()=>{const el=document.getElementById('chat-scroll'); if (el) el.scrollTop=el.scrollHeight;}); }
   function updateComposerPhoto() { render(); requestAnimationFrame(()=>document.getElementById('message-input')?.focus()); }
+  function browserBackup() {
+    const meals=state.meals.map(meal=>({...meal,date:state.activeDate}));
+    const messages=state.messages.map(message=>({...message,date:state.activeDate}));
+    for (const [date,archive] of Object.entries(state.archives||{})) {
+      meals.push(...(archive.meals||[]).map(meal=>({...meal,date})));
+      messages.push(...(archive.messages||[]).map(message=>({...message,date})));
+    }
+    return {format:'boji-browser-v1',exportedAt:new Date().toISOString(),activeDate:state.activeDate,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,profile:state.profile,meals,messages};
+  }
+  async function exportBackup() {
+    try {
+      if (state.connection.mode==='unavailable'||(state.connection.mode==='checking'&&/^https?:$/.test(window.location?.protocol||''))) throw new Error('本地服务尚未就绪，无法导出服务端记录。');
+      let data=browserBackup();
+      if (state.connection.mode==='live') {
+        const response=await fetch('/api/export',{cache:'no-store'});
+        if (!response.ok) throw new Error('导出失败');
+        data=await response.json();
+      }
+      const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+      const link=document.createElement('a');link.href=url;link.download=`boji-backup-${dateKey()}.json`;link.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    } catch(error) {toast(error.message||'导出失败');}
+  }
   function inferMealType(text) {
     if (/早餐|早上/.test(text)) return '早餐'; if (/午餐|中午/.test(text)) return '午餐'; if (/晚餐|晚上/.test(text)) return '晚餐';
     const h=new Date().getHours(); return h<11?'早餐':h<15?'午餐':h<20?'晚餐':'加餐';
@@ -323,81 +359,83 @@
       }
     } finally {reader.releaseLock();}
   }
-  function liveMeal(data, id, text, time) {
-    return {
-      id:id||uid(), type:data.type, name:data.name, calories:data.calories,
-      ...(data.calorie_min!==null&&data.calorie_max!==null?{min:data.calorie_min,max:data.calorie_max}:{}),
-      protein:data.protein, carbs:data.carbs, fat:data.fat, fiber:data.fiber,
-      time:time||timeNow(), input:text,
-    };
+  function applyServerState(snapshot) {
+    state.profile=snapshot.profile;
+    state.onboardingComplete=Boolean(snapshot.profile);
+    state.onboardingDraft=profileDraft(snapshot.profile);
+    state.activeDate=snapshot.activeDate;
+    state.meals=snapshot.meals;
+    state.messages=snapshot.messages;
+    state.archives=snapshot.archives;
+    state.memories=snapshot.memories||[];
+    state.serverToday=snapshot.today;
   }
-  function finishLiveTurn(turn, text, attachment, reasoning) {
+  async function refreshLiveState() {
+    const response=await fetch('/api/state',{cache:'no-store'});
+    if (!response.ok) throw new Error('无法读取服务端记录');
+    applyServerState(await response.json());
+    render();
+  }
+  function finishLiveTurn(payload) {
     clearInterval(thinkingTimer);
     clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
-    const elapsedSeconds=Math.max(1,Math.round((Date.now()-state.pending.startedAt)/1000));
-    let receipt=null, revised=false, reply=turn.reply;
-    if (turn.action==='consumed' && turn.meal) {
-      const meal=liveMeal(turn.meal,null,text);
-      state.meals.push(meal); receipt={...meal};
-    } else if (turn.action==='correction' && turn.meal) {
-      const existing=state.meals.find(m=>m.id===turn.target_meal_id);
-      if (existing) {
-        delete existing.min; delete existing.max;
-        Object.assign(existing,liveMeal(turn.meal,existing.id,existing.input,existing.time));
-        receipt={...existing}; revised=true;
-      } else reply='我还不能确定要改哪一顿。请告诉我餐次或食物名称，我再帮你修正。';
-    }
-    state.messages.push({id:uid(),role:'user',text:text||'上传了一张食物照片',photoUrl:attachment?.url||null,time:timeNow()});
-    const assistantMessage={id:uid(),role:'assistant',text:reply,receipt,revised,time:timeNow(),live:true,reasoningText:reasoning||'',elapsedSeconds};
-    state.messages.push(assistantMessage);
-    state.currentFeedback=assistantMessage;
-    state.pending=null; state.requestError=null; render(); scrollBottom();
+    applyServerState(payload.state);
+    state.currentFeedback=payload.assistantMessage;
+    state.pending=null;state.requestError=null;state.retryRequestId=null;state.retrySource=null;state.correctionTarget=null;
+    render();scrollBottom();
   }
-  async function sendLiveMessage(rawText, attachment) {
+  async function sendLiveMessage(rawText, attachment, options={}) {
     const text=rawText.trim();
     if (!text&&!attachment) return;
+    const requestId=options.requestId||uid()+uid();
     state.pending={phase:'thinking',reasoning:'',reasoningOpen:false,text,startedAt:Date.now()};
     state.requestError=null;state.currentFeedback=null;state.menuOpen=false;
     state.draft='';state.attachment=null;render();scrollBottom();
     clearInterval(thinkingTimer);
     thinkingTimer=setInterval(()=>{const el=document.getElementById('thinking-seconds');if(el&&state.pending)el.textContent=`${Math.floor((Date.now()-state.pending.startedAt)/1000)} 秒`;},1000);
+    const controller=new AbortController();liveController=controller;
     try {
       const response=await fetch('/api/chat',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({text,image:attachment?.url||null,date:new Date().toLocaleDateString('sv-SE'),profile:state.profile,today:totals(),meals:state.meals,messages:state.messages}),
+        body:JSON.stringify({requestId,text,image:attachment?.url||null,targetMealId:state.correctionTarget||null,source:options.source||(attachment?'photo':'text')}),
+        signal:controller.signal,
       });
       if (!response.ok) {
         const error=await response.json().catch(()=>({}));
         throw new Error(error.error||`服务暂时不可用（HTTP ${response.status}）`);
       }
+      if (response.headers?.get('content-type')?.includes('application/json')) {finishLiveTurn(await response.json());return;}
       if (!response.body) throw new Error('浏览器没有收到模型的数据流');
-      let result=null,reasoning='';
+      let result=null;
       for await (const event of readAppEvents(response.body)) {
         if (event.type==='status') {
           state.pending.phase=event.data.phase||'thinking';
           render();
         } else if (event.type==='reasoning') {
-          reasoning=event.data.text||'';
-          state.pending.reasoning=reasoning;
+          state.pending.reasoning=event.data.text||'';
           scheduleReasoningRender();
         } else if (event.type==='result') {
-          result=event.data.result;
-          reasoning=event.data.reasoning||reasoning;
+          result=event.data;
         } else if (event.type==='error') throw new Error(event.data.message||'模型生成失败');
       }
       if (!result) throw new Error('模型没有返回完整结果，请重试');
-      finishLiveTurn(result,text,attachment,reasoning);
+      finishLiveTurn(result);
     } catch (error) {
+      try {
+        const reconcile=await fetch(`/api/turn/${encodeURIComponent(requestId)}`,{cache:'no-store'});
+        if (reconcile.ok) {finishLiveTurn(await reconcile.json());return;}
+      } catch {}
       clearInterval(thinkingTimer);
       clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
-      state.pending=null;state.requestError=error.message||'连接失败，请重试';
-      state.draft=text;state.attachment=attachment||null;render();
-    }
+      state.pending=null;state.requestError=controller.signal.aborted?'已停止生成。输入已保留，可以重试。':(error.message||'连接失败，请重试');
+      state.retryRequestId=requestId;state.retrySource=options.source||(attachment?'photo':'text');state.draft=text;state.attachment=attachment||null;render();
+    } finally {if (liveController===controller) liveController=null;}
   }
-  function sendMessage(rawText, attachment=state.attachment) {
+  function sendMessage(rawText, attachment=state.attachment, options={}) {
     if (ensureCurrentDay()) render();
     if (state.pending) return;
-    if (state.connection.mode==='live') return sendLiveMessage(rawText,attachment);
+    if (['checking','unavailable'].includes(state.connection.mode)&&/^https?:$/.test(window.location?.protocol||'')) return toast('本地服务尚未就绪，请稍后刷新重试');
+    if (state.connection.mode==='live') return sendLiveMessage(rawText,attachment,options);
     return sendDemoMessage(rawText,attachment);
   }
   function sendDemoMessage(rawText, attachment=state.attachment) {
@@ -436,7 +474,7 @@
     state.currentFeedback=assistantMessage;
     state.attachment=null; state.draft=''; state.menuOpen=false; state.correctionTarget=null; render(); scrollBottom();
   }
-  function handleOnboardNext() {
+  async function handleOnboardNext() {
     const d=state.onboardingDraft;
     if (state.onboardStep===0) {
       Object.assign(d,{gender:document.getElementById('ob-gender').value,age:document.getElementById('ob-age').value,height:document.getElementById('ob-height').value,weight:document.getElementById('ob-weight').value});
@@ -450,12 +488,20 @@
       try {nutrition.calculate(d);} catch (error) {return toast(error.message);}
     }
     if (state.onboardStep<3) {state.onboardStep++;render();return;}
+    if (['checking','unavailable'].includes(state.connection.mode)&&/^https?:$/.test(window.location?.protocol||'')) return toast('本地服务尚未就绪，请刷新页面重试');
     const wasComplete=state.onboardingComplete;
-    state.profile={...d,age:Number(d.age),height:Number(d.height),weight:Number(d.weight),...nutrition.calculate(d)};
+    if (state.connection.mode==='live') {
+      try {
+        const response=await fetch('/api/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:d,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})});
+        const payload=await response.json();
+        if (!response.ok) throw new Error(payload.error||'保存资料失败');
+        applyServerState(payload.state);
+      } catch(error) {toast(error.message||'保存资料失败');return;}
+    } else state.profile={...d,age:Number(d.age),height:Number(d.height),weight:Number(d.weight),...nutrition.calculate(d)};
     state.onboardingComplete=true;state.onboardingDraft=profileDraft(state.profile);
     state.modal=null;state.view=wasComplete?'profile':'chat';render();toast(wasComplete?'计划已更新':'计划已建立，可以开始记录');
   }
-  document.addEventListener('click', e => {
+  document.addEventListener('click', async e => {
     const button=e.target.closest('[data-action]'); if (!button) return;
     const action=button.dataset.action;
     if (action==='nav') {state.view=button.dataset.view;state.historyDetail=null;state.currentFeedback=null;render();window.scrollTo(0,0);}
@@ -464,13 +510,50 @@
     else if (action==='expand-today') {state.expanded=!state.expanded;render();}
     else if (action==='dismiss-feedback') {state.currentFeedback=null;render();}
     else if (action==='toggle-pending-reasoning' && state.pending) {state.pending.reasoningOpen=!state.pending.reasoningOpen;render();}
-    else if (action==='retry-live') sendMessage(state.draft,state.attachment);
+    else if (action==='stop-live') liveController?.abort();
+    else if (action==='retry-live') sendMessage(state.draft,state.attachment,{requestId:state.retryRequestId,source:state.retrySource});
     else if (action==='toggle-menu') {state.menuOpen=!state.menuOpen;document.getElementById('composer-menu')?.classList.toggle('open',state.menuOpen);button.setAttribute('aria-expanded',String(state.menuOpen));}
     else if (action==='open-photo') {state.menuOpen=false;document.getElementById('composer-menu')?.classList.remove('open');photoInput.click();}
     else if (action==='remove-photo') {state.attachment=null;updateComposerPhoto();}
     else if (action==='example') sendMessage(button.dataset.text);
-    else if (action==='correct-meal') {state.correctionTarget=button.dataset.meal;state.draft='米饭其实只吃了一半';const input=document.getElementById('message-input'); if (input) {input.value=state.draft;input.focus();}}
+    else if (action==='correct-meal') {state.correctionTarget=button.dataset.meal;state.draft=state.connection.mode==='live'?'请把这顿改为：':'米饭其实只吃了一半';state.view='chat';render();requestAnimationFrame(()=>document.getElementById('message-input')?.focus());}
     else if (action==='onboarding') {state.modal='onboarding';state.onboardStep=0;state.onboardingDraft=profileDraft(state.profile);render();}
+    else if (action==='export-backup') exportBackup();
+    else if (action==='import-backup') backupInput?.click();
+    else if (action==='memory-open') {const memory=state.memories.find(item=>item.id===button.dataset.id);state.memoryEditId=memory?.id||null;state.memoryDraft=memory?.text||'';state.modal='memory';render();}
+    else if (action==='memory-save') {
+      const text=state.memoryDraft.trim();if (text.length<2) return toast('习惯内容至少写 2 个字');
+      try {
+        const endpoint=state.memoryEditId?`/api/memories/${state.memoryEditId}`:'/api/memories';
+        const response=await fetch(endpoint,{method:state.memoryEditId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+        const payload=await response.json();if (!response.ok) throw new Error(payload.error||'保存失败');
+        applyServerState(payload.state);state.modal=null;state.memoryDraft='';state.memoryEditId=null;render();toast('习惯已保存');
+      } catch(error) {toast(error.message||'保存失败');}
+    }
+    else if (action==='memory-delete') {
+      if (!window.confirm('删除这条长期习惯？')) return;
+      try {const response=await fetch(`/api/memories/${button.dataset.id}`,{method:'DELETE'});const payload=await response.json();if (!response.ok) throw new Error(payload.error||'删除失败');applyServerState(payload.state);render();toast('习惯已删除');}
+      catch(error) {toast(error.message||'删除失败');}
+    }
+    else if (action==='delete-photo') {
+      if (!window.confirm('删除这张照片？文字与餐食记录会保留。')) return;
+      try {
+        const response=await fetch(`/api/media/${encodeURIComponent(button.dataset.id)}`,{method:'DELETE'});
+        const payload=await response.json();
+        if (!response.ok) throw new Error(payload.error||'删除失败');
+        applyServerState(payload.state);state.currentFeedback=null;render();toast('照片已删除');
+      } catch(error) {toast(error.message||'删除失败');}
+    }
+    else if (action==='import-select') {
+      const backup=state.importBackup?.data,mode=button.dataset.mode;
+      if (!backup) return;
+      try {
+        const response=await fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({backup,mode})});
+        const payload=await response.json();
+        if (!response.ok) throw new Error(payload.error||'导入失败');
+        applyServerState(payload.state);state.importBackup=null;state.modal=null;render();toast(`已导入 ${payload.importedMeals} 餐、${payload.importedMessages} 条交流`);
+      } catch(error) {toast(error.message||'导入失败');}
+    }
     else if (action==='close-modal') {if (state.modal==='voice') cancelVoiceRecognition();state.modal=null;render();}
     else if (action==='onboard-back') {state.onboardStep=Math.max(0,state.onboardStep-1);render();}
     else if (action==='onboard-next') handleOnboardNext();
@@ -494,6 +577,7 @@
   document.addEventListener('submit', e => { if (e.target.id==='chat-form') {e.preventDefault();sendMessage(document.getElementById('message-input').value);} });
   document.addEventListener('input', e => {
     if (e.target.id==='message-input') state.draft=e.target.value;
+    if (e.target.id==='memory-text') state.memoryDraft=e.target.value;
     if (e.target.id==='voice-transcript') {state.voiceTranscript=e.target.value;const use=document.querySelector('[data-action="voice-use"]');if (use) use.disabled=!state.voiceTranscript.trim();}
     const key={'ob-gender':'gender','ob-age':'age','ob-height':'height','ob-weight':'weight'}[e.target.id];
     if (key && state.onboardingDraft) {state.onboardingDraft[key]=e.target.value;persist();}
@@ -531,6 +615,16 @@
       state.attachment={name:file.name,url:await preparePhoto(file)};
       updateComposerPhoto(); toast('照片已添加，可以补充一句说明');
     } catch { toast('照片读取失败，请换一张试试'); }
+  });
+  backupInput?.addEventListener('change', async e => {
+    const file=e.target.files?.[0];if (!file) return;
+    backupInput.value='';
+    try {
+      if (file.size>20_000_000) throw new Error('备份文件过大，请检查文件内容。');
+      const data=JSON.parse(await file.text());
+      if (!['boji-browser-v1','boji-backup-v1'].includes(data.format)) throw new Error('这不是薄肌记录备份。');
+      state.importBackup={data,fileName:file.name};state.modal='import';render();
+    } catch(error) {toast(error.message||'备份文件读取失败');}
   });
   function voiceErrorMessage(code) {
     const messages={
@@ -583,7 +677,7 @@
       if (state.modal!=='voice'||state.voiceStatus==='error') return;
       if (!state.voiceTranscript) {state.voiceStatus='error';state.voiceError='没有识别到文字。请重试，或改用文字输入。';render();return;}
       if (state.voiceStatus==='processing') {state.voiceStatus='review';render();return;}
-      state.modal=null;sendMessage(state.voiceTranscript);
+      state.modal=null;sendMessage(state.voiceTranscript,null,{source:'voice'});
     };
     state.voiceStatus='starting';state.voiceError='';
     try {recognition.start();render();}
@@ -600,11 +694,12 @@
       const response=await fetch('/api/health',{cache:'no-store'});
       if (!response.ok) throw new Error('服务未连接');
       const health=await response.json();
-      state.connection=health.configured?{mode:'live',model:health.model||'LLM',provider:health.provider||'DeepSeek'}:{mode:'demo',model:'',provider:''};
-    } catch {state.connection={mode:'demo',model:'',provider:''};}
+      state.connection=health.configured?{mode:'live',model:health.model||'LLM',visionModel:health.visionModel,provider:health.provider||'DeepSeek'}:{mode:'demo',model:'',provider:''};
+      if (health.configured) await refreshLiveState();
+    } catch {state.connection={mode:'unavailable',model:'',provider:''};}
     render();
   }
-  window.addEventListener?.('focus',()=>{if (ensureCurrentDay()) render();});
+  window.addEventListener?.('focus',()=>{if (state.connection.mode==='live') refreshLiveState().catch(()=>{});else if (ensureCurrentDay()) render();});
   ensureCurrentDay();
   render();
   checkConnection();

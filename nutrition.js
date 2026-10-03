@@ -56,5 +56,7 @@
     };
   }
 
-  window.BojiNutrition={calculate,validate,ACTIVITY,GOALS};
+  const api={calculate,validate,ACTIVITY,GOALS};
+  if (typeof window!=='undefined') window.BojiNutrition=api;
+  if (typeof module!=='undefined') module.exports=api;
 })();

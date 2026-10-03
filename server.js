@@ -2,6 +2,7 @@ const http = require('node:http');
 const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const {Store} = require('./store.js');
 
 const ROOT = __dirname;
 function readLocalConfig() {
@@ -24,7 +25,8 @@ function readLocalConfig() {
 const localConfig = readLocalConfig();
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
-const MODEL = process.env.DEEPSEEK_MODEL || localConfig.model?.trim() || 'deepseek-flash';
+const MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro';
+const VISION_MODEL = process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash';
 const API_KEY = process.env.DEEPSEEK_API_KEY || localConfig.apiKey?.trim() || '';
 
 const mealSchema = {
@@ -39,8 +41,17 @@ const mealSchema = {
     carbs: {type: 'integer'},
     fat: {type: 'integer'},
     fiber: {type: 'integer'},
+    food_items: {type:'array', minItems:1, maxItems:20, items:{
+      type:'object', properties:{
+        food_name:{type:'string'}, estimated_amount:{type:'string'}, calories:{type:'integer'},
+        protein:{type:'integer'}, carbs:{type:'integer'}, fat:{type:'integer'}, fiber:{type:'integer'},
+        confidence:{type:'string',enum:['high','medium','low']},
+      },
+      required:['food_name','estimated_amount','calories','protein','carbs','fat','fiber','confidence'],
+      additionalProperties:false,
+    }},
   },
-  required: ['name', 'type', 'calories', 'calorie_min', 'calorie_max', 'protein', 'carbs', 'fat', 'fiber'],
+  required: ['name', 'type', 'calories', 'calorie_min', 'calorie_max', 'protein', 'carbs', 'fat', 'fiber','food_items'],
   additionalProperties: false,
 };
 
@@ -50,22 +61,23 @@ const turnSchema = {
     action: {type: 'string', enum: ['consumed', 'planned', 'question', 'correction', 'clarify']},
     reply: {type: 'string'},
     target_meal_id: {type: ['string', 'null']},
+    occurred_on: {type:['string','null']},
     meal: {anyOf: [mealSchema, {type: 'null'}]},
   },
-  required: ['action', 'reply', 'target_meal_id', 'meal'],
+  required: ['action', 'reply', 'target_meal_id', 'occurred_on', 'meal'],
   additionalProperties: false,
 };
 
 const instructions = `你是“薄肌”App 的 AI 饮食教练，面向普通健身用户。用自然、简洁的中文回复，通常 1–3 小段。数据都是估算，不要伪精确；不做医学诊断。
 
 根据用户本轮输入选择 action：
-- consumed：明确已经吃过，或直接上传食物照片作为记录。估算整顿饭的营养并返回 meal。
+- consumed：明确已经吃过，或直接上传食物照片作为记录。估算整顿饭的营养并返回 meal。若用户明确提到昨天、前天或过去日期，occurred_on 填对应 YYYY-MM-DD；否则为 null。
 - planned：准备吃、想吃、假设要吃。不要记录，meal 为 null。
 - question：营养咨询或食物决策问题。不要记录，meal 为 null。
 - correction：用户修改已经记录的一顿。根据提供的餐次 ID 找到目标，target_meal_id 填该 ID；meal 填修正后“整顿饭”的总估算。如果无法判断要改哪顿，用 clarify。
 - clarify：信息不足，只有一个关键追问；meal 为 null。
 
-只有 consumed 或有明确目标的 correction 才能改变用户今日营养状态。对照片要结合用户补充描述；用户说“准备吃”时即使有照片也不能记录。能够合理估算就直接估算，低把握用热量区间。reply 要先回应用户最关心的问题；记录后简述本餐、今日状态和下一步建议。不要在 reply 中输出 JSON、Markdown 表格或内部字段名。结合用户目标、已记录餐次和训练状态回答。`;
+只有 consumed 或有明确目标的 correction 才能改变营养记录。普通附图提问不自动记录；补记过去日期只改变对应日期，不要说“今日已增加”。能够合理估算就直接估算，低把握用热量区间。meal.food_items 应拆出每种主要食物和调味/饮料，估算份量、热量与宏量营养素；整餐数值应等于食物项相加。常见参考：一个鸡蛋约 70–80 kcal、蛋白质约 6g；熟米饭每 100g 约 115 kcal；一片吐司约 70–90 kcal；调味油每 10g 约 90 kcal。其他食物请用常见营养参考保守估算。追问只问一次最重要的问题。近七天统计必须使用服务端提供的 last_seven_days，不要编造。长期习惯仅作为相关时的参考，本轮用户明确描述优先于旧习惯；一次性修正不代表永久偏好。reply 要先回应用户最关心的问题，记录后简述本餐和一条建议；不要自行编造记录后的累计数字，服务端会追加权威累计。不要在 reply 中输出 JSON、Markdown 表格或内部字段名。结合用户目标、真实已记录餐次和训练状态回答。`;
 
 function sendEvent(res, type, data) {
   if (!res.writableEnded) res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -129,12 +141,12 @@ async function* readSSE(body) {
   }
 }
 
-async function readRequestJson(req) {
+async function readRequestJson(req, maxBytes=2_000_000) {
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 2_000_000) {
+    if (size > maxBytes) {
       const error = new Error('图片或消息过大，请缩小后重试');
       error.status = 413;
       throw error;
@@ -147,23 +159,30 @@ async function readRequestJson(req) {
 
 function validContext(body) {
   return body && typeof body.text === 'string' && body.text.length <= 4000
+    && (body.text.trim() || body.image)
     && (!body.image || (typeof body.image === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(body.image) && body.image.length < 1_600_000))
-    && body.profile && typeof body.profile === 'object'
-    && Array.isArray(body.meals) && Array.isArray(body.messages);
+    && typeof body.requestId === 'string' && /^[a-zA-Z0-9-]{8,80}$/.test(body.requestId)
+    && (!body.targetMealId || typeof body.targetMealId === 'string');
 }
 
-function buildInput(body) {
+function buildInput(body, state, clarification, imageDescription, historySummary) {
+  const allMeals=[...state.meals,...Object.values(state.archives).flatMap(archive=>archive.meals||[])];
   const context = {
-    date: body.date,
-    profile: body.profile,
-    today: body.today,
-    meals: body.meals.slice(-20).map(m => ({id: m.id, type: m.type, name: m.name, calories: m.calories, protein: m.protein, carbs: m.carbs, fat: m.fat, fiber: m.fiber})),
-    recent_messages: body.messages.slice(-12).map(m => ({role: m.role, text: m.text || '', after: m.after || ''})),
+    date: state.activeDate,
+    profile: state.profile,
+    today: state.today,
+    meals: state.meals.slice(-20).map(m => ({id:m.id,type:m.type,name:m.name,food_items:m.foodItems,calories:m.calories,protein:m.protein,carbs:m.carbs,fat:m.fat,fiber:m.fiber})),
+    target_meal:body.targetMealId?allMeals.find(meal=>meal.id===body.targetMealId)||null:null,
+    last_seven_days:historySummary,
+    confirmed_habits:state.memories.slice(0,20).map(memory=>memory.text),
+    recent_messages: state.messages.slice(-12).map(m => ({role:m.role,text:m.text||'',after:m.after||''})),
+    prior_clarification: clarification ? {original_text:clarification.original_text, date:clarification.date, image_description:clarification.image_json?JSON.parse(clarification.image_json).description:null} : null,
+    target_meal_id: body.targetMealId || null,
+    image_description: imageDescription || null,
+    image_intent: body.image ? (body.text.trim() ? '结合文字判断记录或咨询' : '拍照记录一餐') : null,
     user_message: body.text || (body.image ? '我上传了一张食物照片，请帮我记录。' : ''),
   };
-  const content = [{type: 'input_text', text: JSON.stringify(context)}];
-  if (body.image) content.push({type: 'input_image', image_url: body.image, detail: 'low'});
-  return [{role: 'user', content}];
+  return [{role:'user',content:[{type:'input_text',text:JSON.stringify(context)}]}];
 }
 
 function validateResult(result) {
@@ -174,19 +193,55 @@ function validateResult(result) {
     for (const field of ['calories', 'protein', 'carbs', 'fat', 'fiber']) {
       if (!Number.isInteger(m[field]) || m[field] < 0 || m[field] > 10000) throw new Error('模型返回的营养数据无效');
     }
+    if (!Array.isArray(m.food_items) || m.food_items.length < 1 || m.food_items.length > 20) throw new Error('模型没有给出可用的食物项');
+    const sums={calories:0,protein:0,carbs:0,fat:0,fiber:0};
+    for (const item of m.food_items) {
+      if (!item || typeof item.food_name !== 'string' || !item.food_name.trim() || typeof item.estimated_amount !== 'string' || !item.estimated_amount.trim() || !['high','medium','low'].includes(item.confidence)) throw new Error('模型食物项无效');
+      for (const field of Object.keys(sums)) {
+        if (!Number.isInteger(item[field]) || item[field] < 0 || item[field] > 5000) throw new Error('模型食物项营养数据无效');
+        sums[field]+=item[field];
+      }
+    }
+    if (Math.abs(sums.calories-m.calories)>Math.max(40,m.calories*.2)) throw new Error('模型整餐热量与食物项不一致');
+    for (const field of Object.keys(sums)) m[field]=sums[field];
+    if (m.calorie_min!==null && m.calorie_max!==null && (!Number.isInteger(m.calorie_min)||!Number.isInteger(m.calorie_max)||m.calorie_min>m.calories||m.calorie_max<m.calories||m.calorie_min<0)) throw new Error('模型热量区间无效');
+    if ((m.calorie_min===null)!==(m.calorie_max===null)) throw new Error('模型热量区间不完整');
   }
   return result;
 }
 
-function enforceRecordBoundary(result, text, hasImage) {
+function enforceRecordBoundary(result, text, hasImage, targetMealId, clarification, meals=[]) {
+  if (result.action === 'correction') {
+    const chosen=targetMealId ? meals.find(meal=>meal.id===targetMealId) : null;
+    const candidates=meals.filter(meal=>text.includes(meal.name)||meal.foodItems?.some(item=>{
+      const name=item.food_name.replace(/^(熟|生|一份)/,'');return name.length>=2&&text.includes(name);
+    }));
+    const inferred=chosen || (meals.length===1?meals[0]:candidates.length===1?candidates[0]:null);
+    if (!inferred) return {...result,action:'clarify',target_meal_id:null,meal:null,reply:'你想修改哪一顿？说一下餐次或食物，我再帮你调整。'};
+    result.target_meal_id=inferred.id;
+  }
+  if (result.action === 'clarify' && clarification) return {...result,action:'question',meal:null,target_meal_id:null,reply:'目前信息仍不足，我先不记录这顿。你想起来主要食物后再告诉我即可。'};
   if (result.action !== 'consumed') return result;
-  const eaten = /(吃了|喝了|吃过|喝过|吃的|喝的|已吃|刚吃|刚喝|吃完|喝完)/.test(text);
-  const planned = /((想|准备|打算|计划).{0,10}吃|还没吃|如果.{0,12}吃|明天.{0,12}吃)/.test(text);
+  const eaten = /(吃了|喝了|吃过|喝过|吃的|喝的|已吃|刚吃|刚喝|吃完|喝完|吃了一碗|吃了一份)/.test(text);
+  const planned = /((想|准备|打算|计划).{0,10}吃|还没吃|如果.{0,12}吃|明天.{0,12}吃|想要吃)/.test(text);
   const question = /(多少卡|多少热量|能不能吃|可不可以吃|可以吃|还能吃|会不会超|为什么|[?？])/.test(text);
   if (planned && !eaten) return {...result, action: 'planned', meal: null, target_meal_id: null, reply: '这顿还没有计入今天的记录。你吃完后告诉我，我再结合当时的份量帮你估算和记录。'};
   if (question && !eaten) return {...result, action: 'question', meal: null, target_meal_id: null, reply: '这是饮食咨询，暂时不会计入今天的记录。你可以问我怎么安排；真正吃完后再告诉我。'};
-  if (!hasImage && !eaten) return {...result, action: 'clarify', meal: null, target_meal_id: null, reply: '这份是已经吃了，还是准备吃？确认后我再帮你记录。'};
+  if (!hasImage && !eaten && !clarification) return {...result, action: 'clarify', meal: null, target_meal_id: null, reply: '这份是已经吃了，还是准备吃？确认后我再帮你记录。'};
   return result;
+}
+
+function resolveMealDate(result, text, today, clarification) {
+  if (result.action!=='consumed') return today;
+  const shift=days=>new Date(Date.parse(`${today}T12:00:00Z`)-days*86400000).toISOString().slice(0,10);
+  if (/前天/.test(text)) return shift(2);
+  if (/昨天/.test(text)) return shift(1);
+  if (/(^|\D)\d{4}-\d{2}-\d{2}(\D|$)|\d{1,2}月\d{1,2}日/.test(text) && /^\d{4}-\d{2}-\d{2}$/.test(result.occurred_on||'')) {
+    const proposed=result.occurred_on;
+    const parsed=new Date(`${proposed}T12:00:00Z`);
+    if (!Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0,10)===proposed && proposed<=today && proposed>=shift(365)) return proposed;
+  }
+  return clarification?.date||today;
 }
 
 function apiErrorMessage(status, detail) {
@@ -197,43 +252,134 @@ function apiErrorMessage(status, detail) {
   return `模型请求失败（HTTP ${status}）${detail ? `：${detail.slice(0, 160)}` : ''}`;
 }
 
-function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThis.fetch} = {}) {
-  return http.createServer(async (req, res) => {
+async function describeImage(image, {apiKey, visionModel, fetchImpl, signal}) {
+  const response=await fetchImpl('https://api.deepseek.com/responses',{
+    method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},
+    body:JSON.stringify({model:visionModel,reasoning:{effort:'none'},max_output_tokens:1200,
+      instructions:'请只描述照片中可辨认的食物、可能的份量和无法辨认的部分。不要声称用户已经吃了，也不要编造看不到的配料。简洁中文。',
+      input:[{role:'user',content:[{type:'input_text',text:'请描述这张饮食照片。'},{type:'input_image',image_url:image,detail:'high'}]}]}),signal,
+  });
+  if (!response.ok) throw new Error(apiErrorMessage(response.status,await response.text()));
+  const payload=await response.json();
+  if (payload.status!=='completed') throw new Error('照片识别未完成，请重试。');
+  const description=extractOutputText(payload).trim();
+  if (!description) throw new Error('没有识别到照片内容，请补充文字说明。');
+  return description.slice(0,3000);
+}
+
+function json(res, status, data) {
+  res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+  res.end(JSON.stringify(data));
+}
+
+function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_MODEL, fetchImpl = globalThis.fetch, dbPath} = {}) {
+  const store=new Store(dbPath);
+  const server=http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/api/health') {
-      res.writeHead(200, {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'});
-      res.end(JSON.stringify({configured: Boolean(apiKey), model, provider: 'DeepSeek'}));
+      json(res,200,{configured:Boolean(apiKey),model,visionModel,provider:'DeepSeek',persistent:true});
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/state') {
+      json(res,200,store.state());
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/export') {
+      res.setHeader('Content-Disposition','attachment; filename="boji-backup.json"');
+      json(res,200,store.exportData());
+      return;
+    }
+    if (req.method === 'GET' && /^\/api\/media\/[a-f0-9-]{36}$/.test(req.url)) {
+      const media=store.readMedia(req.url.slice('/api/media/'.length));
+      if (!media) return json(res,404,{error:'照片不存在。'});
+      res.writeHead(200,{'Content-Type':media.mime,'Cache-Control':'private, max-age=3600','X-Content-Type-Options':'nosniff'});
+      res.end(media.bytes);return;
+    }
+    if (req.method === 'DELETE' && /^\/api\/media\/[a-f0-9-]{36}$/.test(req.url)) {
+      const deleted=store.deleteMedia(req.url.slice('/api/media/'.length));
+      json(res,deleted?200:404,deleted?{deleted:true,state:store.state()}:{error:'照片不存在。'});
+      return;
+    }
+    if (req.method === 'GET' && /^\/api\/turn\/[a-zA-Z0-9-]{8,80}$/.test(req.url)) {
+      const prior=store.priorTurn(req.url.slice('/api/turn/'.length));
+      json(res,prior?200:404,prior?{...prior.result,state:store.state()}:{error:'请求尚未完成或不存在。'});
+      return;
+    }
+    if (req.method === 'PUT' && req.url === '/api/profile') {
+      try {
+        if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
+        const body=await readRequestJson(req);
+        const profile=store.saveProfile(body.profile||body,body.timezone);
+        json(res,200,{profile,state:store.state()});
+      } catch(error) { json(res,error.status||500,{error:error.message||'保存资料失败'}); }
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/import') {
+      try {
+        if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
+        const body=await readRequestJson(req,20_000_000);
+        json(res,200,store.importData(body.backup,body.mode));
+      } catch(error) {json(res,error.status||400,{error:error.message||'导入失败'});}
+      return;
+    }
+    if (req.url === '/api/memories' && req.method === 'GET') return json(res,200,{memories:store.memories()});
+    if (req.url === '/api/memories' && req.method === 'POST') {
+      try {
+        const body=await readRequestJson(req);
+        const memory=store.saveMemory(body.text);
+        json(res,201,{memory,state:store.state()});
+      } catch(error) {json(res,error.status||400,{error:error.message||'保存习惯失败'});}
+      return;
+    }
+    if (/^\/api\/memories\/[a-f0-9-]{36}$/.test(req.url) && ['PUT','DELETE'].includes(req.method)) {
+      try {
+        const id=req.url.slice('/api/memories/'.length);
+        const changed=req.method==='DELETE'?store.deleteMemory(id):store.updateMemory(id,(await readRequestJson(req)).text);
+        json(res,changed?200:404,changed?{changed:true,state:store.state()}:{error:'习惯不存在。'});
+      } catch(error) {json(res,error.status||400,{error:error.message||'更新习惯失败'});}
       return;
     }
 
     if (req.method === 'POST' && req.url === '/api/chat') {
-      if (!apiKey) {
-        res.writeHead(503, {'Content-Type': 'application/json; charset=utf-8'});
-        res.end(JSON.stringify({error: '未配置 DeepSeek API Key。'}));
-        return;
-      }
+      if (!apiKey) return json(res,503,{error:'未配置 DeepSeek API Key。'});
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
-        res.writeHead(415, {'Content-Type': 'application/json; charset=utf-8'});
-        res.end(JSON.stringify({error: '仅接受 JSON 请求。'}));
-        return;
+        return json(res,415,{error:'仅接受 JSON 请求。'});
       }
 
-      let abort;
+      let abort, timeout, clientClosed=false, timedOut=false;
       try {
+        const startedAt=Date.now();
         const body = await readRequestJson(req);
         if (!validContext(body)) {
-          res.writeHead(400, {'Content-Type': 'application/json; charset=utf-8'});
-          res.end(JSON.stringify({error: '消息数据不完整或图片过大。'}));
-          return;
+          return json(res,400,{error:'消息数据不完整或图片过大。'});
         }
+        if (body.targetMealId && /^请把这顿改为[：:]?\s*$/.test(body.text)) return json(res,400,{error:'请先补充这顿实际吃了什么或改了多少。'});
+        const profile=store.profile();
+        if (!profile) return json(res,409,{error:'请先完成基本资料建档。'});
+        const source=['voice','photo','text'].includes(body.source)?body.source:(body.image?'photo':'text');
+        const requestInput={text:body.text.trim(),image:body.image||null,targetMealId:body.targetMealId||null,source};
+        const requestHash=Store.hashRequest(requestInput);
+        const prior=store.priorTurn(body.requestId);
+        if (prior) {
+          if (prior.hash!==requestHash) return json(res,409,{error:'请求 ID 已用于另一条消息。'});
+          return json(res,200,{...prior.result,state:store.state(),replayed:true});
+        }
+        const state=store.state();
+        const clarification=store.clarification();
         abort = new AbortController();
-        res.on('close', () => abort.abort());
+        res.on('close', () => {clientClosed=true;abort.abort();});
+        timeout=setTimeout(()=>{timedOut=true;abort.abort();},120000);
+        let imageDescription='';
+        if (body.image) {
+          imageDescription=await describeImage(body.image,{apiKey,visionModel,fetchImpl,signal:abort.signal});
+          store.logModelCall({requestId:body.requestId,model:visionModel,purpose:'vision',status:'completed'});
+        }
         const upstream = await fetchImpl('https://api.deepseek.com/responses', {
           method: 'POST',
           headers: {'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json'},
           body: JSON.stringify({
-            model, instructions, input: buildInput(body), stream: true,
-            reasoning: {effort: 'low'},
-            max_output_tokens: 5000,
+            model, instructions, input: buildInput(body,state,clarification,imageDescription,store.lastSevenSummary(state.activeDate)), stream: true,
+            reasoning: {effort: 'high'},
+            max_output_tokens: 8000,
             text: {format: {type: 'json_schema', name: 'nutrition_turn', schema: turnSchema}},
           }),
           signal: abort.signal,
@@ -241,14 +387,10 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
 
         if (!upstream.ok) {
           const errorText = await upstream.text();
-          res.writeHead(upstream.status, {'Content-Type': 'application/json; charset=utf-8'});
-          res.end(JSON.stringify({error: apiErrorMessage(upstream.status, errorText)}));
-          return;
+          return json(res,upstream.status,{error:apiErrorMessage(upstream.status,errorText)});
         }
         if (!upstream.body) {
-          res.writeHead(502, {'Content-Type': 'application/json; charset=utf-8'});
-          res.end(JSON.stringify({error: 'DeepSeek 没有返回数据流，请重试。'}));
-          return;
+          return json(res,502,{error:'DeepSeek 没有返回数据流，请重试。'});
         }
 
         res.writeHead(200, {
@@ -263,6 +405,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
         let reasoning = '';
         let completed = false;
         let composing = false;
+        let usage=null;
         const reasoningParts = new Map();
         for await (const event of readSSE(upstream.body)) {
           if (event.type === 'response.reasoning_text.delta' || event.type === 'response.reasoning_text.done') {
@@ -278,6 +421,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
             completed = true;
             outputText ||= extractOutputText(event.response);
             reasoning ||= extractReasoning(event.response);
+            usage=event.response?.usage||null;
           } else if (event.type === 'response.incomplete') {
             throw new Error('模型输出被截断，请缩短输入后重试。');
           } else if (event.type === 'response.failed' || event.type === 'error') {
@@ -285,17 +429,18 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
           }
         }
         if (!completed) throw new Error('模型连接中断，请重试');
-        const result = enforceRecordBoundary(validateResult(JSON.parse(outputText)), body.text, Boolean(body.image));
-        sendEvent(res, 'result', {result, reasoning});
+        const allMeals=[...state.meals,...Object.values(state.archives).flatMap(archive=>archive.meals||[])];
+        const result = enforceRecordBoundary(validateResult(JSON.parse(outputText)),body.text,Boolean(body.image),body.targetMealId,clarification,allMeals);
+        store.logModelCall({requestId:body.requestId,model,purpose:'nutrition-turn',status:'completed',inputTokens:usage?.input_tokens,outputTokens:usage?.output_tokens});
+        const committed=store.commitTurn({requestId:body.requestId,requestHash,conversationDate:state.activeDate,mealDate:resolveMealDate(result,body.text,state.activeDate,clarification),text:body.text.trim(),image:body.image||null,imageDescription,source,result,reasoning,elapsedSeconds:Math.max(1,Math.round((Date.now()-startedAt)/1000))});
+        sendEvent(res, 'result', {...committed,state:store.state(),requestId:body.requestId});
         res.end();
       } catch (error) {
-        if (res.writableEnded || abort?.signal.aborted) return;
-        if (res.headersSent) { sendEvent(res, 'error', {message: error.message || '模型请求失败'}); res.end(); }
-        else {
-          res.writeHead(error.status || 500, {'Content-Type': 'application/json; charset=utf-8'});
-          res.end(JSON.stringify({error: error.message || '模型请求失败'}));
-        }
-      }
+        if (res.writableEnded || clientClosed) return;
+        const message=timedOut?'模型响应超时，请重试。':(error.message||'模型请求失败');
+        if (res.headersSent) { sendEvent(res, 'error', {message}); res.end(); }
+        else json(res,error.status||500,{error:message});
+      } finally {clearTimeout(timeout);}
       return;
     }
 
@@ -308,6 +453,8 @@ function createAppServer({apiKey = API_KEY, model = MODEL, fetchImpl = globalThi
       res.end(content);
     } catch { res.writeHead(500); res.end('Could not load file'); }
   });
+  server.on('close',()=>store.close());
+  return server;
 }
 
 if (require.main === module) {
@@ -318,8 +465,8 @@ if (require.main === module) {
   });
   server.listen(PORT, HOST, () => {
     console.log(`薄肌 Demo 已启动：http://${HOST}:${PORT}`);
-    console.log(API_KEY ? `LLM 已配置：${MODEL}` : '未配置 API Key；页面将使用本地演示回复。');
+    console.log(API_KEY ? `LLM 已配置：文字 ${MODEL}，图片 ${VISION_MODEL}` : '未配置 API Key；页面将使用本地演示回复。');
   });
 }
 
-module.exports = {createAppServer, turnSchema, validateResult, readSSE};
+module.exports = {createAppServer, turnSchema, validateResult, readSSE, enforceRecordBoundary};
