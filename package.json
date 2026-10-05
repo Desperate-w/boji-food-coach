@@ -4,6 +4,6 @@
   "version": "0.2.0",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test nutrition.test.js voice.test.js backend.test.js"
+    "test": "node --test nutrition.test.js voice.test.js today.test.js backend.test.js"
   }
 }

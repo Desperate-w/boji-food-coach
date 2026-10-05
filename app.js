@@ -141,16 +141,24 @@
     return `<header class="topbar"><div class="topbar-title"><h1>${title}</h1><span class="topbar-date">${state.view==='chat'?todayLabel():'AI 薄肌饮食教练'}</span></div><div class="topbar-actions">${badge}${state.view==='chat'?`<button class="icon-button mobile-only" data-action="nav" data-view="history" aria-label="查看历史">${icon('calendar')}</button>`:''}</div></header>`;
   }
   function renderToday() {
-    const t=totals(), p=state.profile, pct=Math.min(100,Math.round(t.calories/(p.caloriesMax+300)*100));
-    const targetStart=Math.min(100,Math.round(p.caloriesMin/(p.caloriesMax+300)*100));
-    const targetWidth=Math.max(1,Math.round((p.caloriesMax-p.caloriesMin)/(p.caloriesMax+300)*100));
+    const t=totals(), p=state.profile;
+    const calorieScale=Math.max(1,p.caloriesMax+300);
+    const caloriePct=Math.min(100,Math.max(0,Math.round(t.calories/calorieScale*100)));
+    const targetStart=Math.min(100,Math.max(0,Math.round(p.caloriesMin/calorieScale*100)));
+    const targetWidth=Math.max(1,Math.min(100-targetStart,Math.round((p.caloriesMax-p.caloriesMin)/calorieScale*100)));
+    const proteinTarget=Math.max(1,p.proteinTarget);
+    const proteinPct=Math.max(0,Math.round(t.protein/proteinTarget*100));
+    const calorieProgress=!state.meals.length?'等待第一顿记录':t.calories<p.caloriesMin?`距建议下限 ${fmt(p.caloriesMin-t.calories)} kcal`:t.calories<=p.caloriesMax?'处于建议范围':`高出建议上限 ${fmt(t.calories-p.caloriesMax)} kcal`;
+    const proteinProgress=!state.meals.length?'等待第一顿记录':t.protein>=p.proteinTarget?'已达到今日目标':`已完成 ${proteinPct}% · 还差约 ${fmt(p.proteinTarget-t.protein)}g`;
+    const mealRows=state.meals.map(meal=>`<li class="today-meal"><span class="today-meal-name">${escapeHtml(meal.type||'餐食')} · ${escapeHtml(meal.name||'一顿饮食')}</span><span class="today-meal-values">${fmt(meal.calories||0)} kcal <span aria-hidden="true">·</span> 蛋白质 ${fmt(meal.protein||0)}g</span></li>`).join('');
     return `<section class="today-card ${state.expanded?'expanded':''}" aria-label="今日饮食状态">
-      <div class="today-main"><div class="today-heading"><span class="eyebrow">TODAY / 今日状态</span><span class="status-badge"><span class="status-dot"></span>${status()}</span></div>
-      <div class="today-stats"><div><div class="stat-label">已摄入热量</div><div class="stat-value">${fmt(t.calories)}<span class="stat-unit">kcal</span></div><div class="stat-sub">今日建议 ${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal</div></div>
-      <div><div class="stat-label">蛋白质</div><div class="stat-value protein-value">${fmt(t.protein)}<span class="slash">/</span><span class="target">${fmt(p.proteinTarget)}</span><span class="stat-unit">g</span></div><div class="stat-sub">${!state.meals.length?'等待第一顿记录':t.protein>=p.proteinTarget?'今天已达标':`还差约 ${fmt(p.proteinTarget-t.protein)}g`}</div></div></div>
-      <div class="range-track" aria-label="热量摄入相对目标范围"><div class="range-target" style="left:${targetStart}%;width:${targetWidth}%"></div><div class="range-fill" style="width:${pct}%"></div></div>
-      <div class="today-advice">${icon('spark')}<span>${advice()}</span></div></div>
-      <div class="today-detail"><div class="detail-grid"><div class="detail-cell"><span class="stat-label">碳水</span><div class="detail-number">${fmt(t.carbs)}g</div><div class="detail-caption">估算摄入</div></div><div class="detail-cell"><span class="stat-label">脂肪</span><div class="detail-number">${fmt(t.fat)}g</div><div class="detail-caption">估算摄入</div></div><div class="detail-cell"><span class="stat-label">已记录</span><div class="detail-number">${state.meals.length} 餐</div><div class="detail-caption">今天</div></div></div></div>
+      <div class="today-main"><div class="today-heading"><span class="eyebrow">TODAY / 今日状态</span><span class="status-badge"><span class="status-dot"></span>${escapeHtml(status())}</span></div>
+      <div class="today-stats"><div class="today-stat ${t.calories>p.caloriesMax?'is-over':''}"><div class="stat-label">已摄入热量</div><div class="stat-value">${fmt(t.calories)}<span class="stat-unit">kcal</span></div><div class="stat-sub">今日建议 ${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal</div>
+      <div class="range-track ${t.calories>p.caloriesMax?'is-over':''}" role="img" aria-label="热量 ${fmt(t.calories)} 千卡，建议范围 ${fmt(p.caloriesMin)} 到 ${fmt(p.caloriesMax)} 千卡"><div class="range-target" style="left:${targetStart}%;width:${targetWidth}%"></div><div class="range-fill" style="width:${caloriePct}%"></div></div><div class="progress-caption">${calorieProgress}</div></div>
+      <div class="today-stat"><div class="stat-label">蛋白质</div><div class="stat-value protein-value">${fmt(t.protein)}<span class="slash">/</span><span class="target">${fmt(p.proteinTarget)}</span><span class="stat-unit">g</span></div><div class="stat-sub">今日目标</div>
+      <div class="protein-track" role="progressbar" aria-label="今日蛋白质" aria-valuemin="0" aria-valuemax="${Math.round(proteinTarget)}" aria-valuenow="${Math.round(Math.min(t.protein,proteinTarget))}" aria-valuetext="已摄入 ${fmt(t.protein)} 克，目标 ${fmt(p.proteinTarget)} 克"><div class="protein-fill" style="width:${Math.min(100,proteinPct)}%"></div></div><div class="progress-caption">${proteinProgress}</div></div></div>
+      <div class="today-advice">${icon('spark')}<span>${escapeHtml(advice())}</span></div></div>
+      <div class="today-detail"><div class="detail-grid"><div class="detail-cell"><span class="stat-label">碳水</span><div class="detail-number">${fmt(t.carbs)}g</div><div class="detail-caption">参考约 ${fmt(p.carbsTarget)}g</div></div><div class="detail-cell"><span class="stat-label">脂肪</span><div class="detail-number">${fmt(t.fat)}g</div><div class="detail-caption">参考约 ${fmt(p.fatTarget)}g</div></div><div class="detail-cell"><span class="stat-label">膳食纤维</span><div class="detail-number">${fmt(t.fiber||0)}g</div><div class="detail-caption">估算摄入</div></div></div><p class="detail-note">碳水和脂肪是参考分配，无需刻意吃满。</p><div class="today-meals-heading">今天已记录 <span>${state.meals.length} 餐</span></div>${mealRows?`<ul class="today-meals">${mealRows}</ul>`:'<p class="today-meals-empty">还没有餐食记录</p>'}</div>
       <button class="today-expand" data-action="expand-today">${state.expanded?'收起详细数据':'查看详细数据'} ${icon('down')}</button>
     </section>`;
   }
