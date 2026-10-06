@@ -19,6 +19,7 @@ async function withServer(fn) {
     const request=JSON.parse(init.body);calls.push(request);
     if (request.model==='deepseek-flash') return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:'一份鸡肉饭，含米饭和鸡肉。'}]}]}),{headers:{'Content-Type':'application/json'}});
     const output=outputs.shift()||turn('question');
+    if (request.text?.format?.name==='manual_meal') return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(output)}]}]}),{headers:{'Content-Type':'application/json'}});
     if (output.incomplete) return new Response(`data: ${JSON.stringify({type:'response.incomplete'})}\n\n`,{headers:{'Content-Type':'text/event-stream'}});
     return fakeStream(output);
   };
@@ -85,6 +86,68 @@ test('question does not write meal; correction revises the saved meal',async()=>
   assert.equal(state.meals[0].id,old.id);
   const backup=(await request('/api/export')).payload;
   assert.equal(backup.revisions.length,1);
+}));
+
+test('manual History add and edit refresh nutrition totals and keep a revision',async()=>withServer(async({request,outputs,calls})=>{
+  await request('/api/profile','PUT',{profile,timezone:'Asia/Shanghai'});
+  const today=(await request('/api/state')).payload.activeDate;
+  outputs.push(egg);
+  const added=await request('/api/meals','POST',{date:today,type:'午餐',description:'鸡蛋 2 个'});
+  assert.equal(added.status,201);
+  const id=added.payload.meal.id;
+  assert.equal(added.payload.state.meals[0].type,'午餐');
+  assert.equal(added.payload.state.meals[0].foodItems[0].food_name,'鸡蛋');
+  assert.equal(added.payload.state.today.calories,150);
+  assert.equal(added.payload.state.today.protein,12);
+  assert.equal(added.payload.state.today.carbs,1);
+  assert.equal(added.payload.state.messages.length,0);
+  const corrected={...egg,calories:75,calorie_min:70,calorie_max:80,protein:6,carbs:1,fat:5,food_items:[{...egg.food_items[0],estimated_amount:'1 个',calories:75,protein:6,carbs:1,fat:5}]};
+  outputs.push(corrected);
+  const edited=await request(`/api/meals/${id}`,'PUT',{type:'晚餐',description:'鸡蛋 1 个'});
+  assert.equal(edited.status,200);
+  assert.equal(edited.payload.state.meals.length,1);
+  assert.equal(edited.payload.state.meals[0].type,'晚餐');
+  assert.equal(edited.payload.state.today.calories,75);
+  assert.equal(edited.payload.state.today.protein,6);
+  assert.equal(edited.payload.state.today.fat,5);
+  assert.equal((await request('/api/export')).payload.revisions.length,1);
+  assert.equal(calls.filter(call=>call.text?.format?.name==='manual_meal').length,2);
+  assert.equal((await request('/api/meals','POST',{date:'2026-02-30',type:'早餐',description:'鸡蛋'})).status,400);
+}));
+
+test('manual edits to a past day update that day without changing Today',async()=>withServer(async({request,outputs})=>{
+  await request('/api/profile','PUT',{profile,timezone:'Asia/Shanghai'});
+  const today=(await request('/api/state')).payload.activeDate;
+  const yesterday=new Date(Date.parse(`${today}T12:00:00Z`)-86400000).toISOString().slice(0,10);
+  outputs.push(egg);
+  const added=await request('/api/meals','POST',{date:yesterday,type:'早餐',description:'鸡蛋 2 个'});
+  assert.equal(added.status,201);
+  assert.equal(added.payload.state.today.calories,0);
+  assert.equal(added.payload.state.archives[yesterday].calories,150);
+  assert.ok(added.payload.state.archives[yesterday].plan.caloriesMin);
+  const corrected={...egg,calories:75,calorie_min:70,calorie_max:80,protein:6,carbs:1,fat:5,food_items:[{...egg.food_items[0],estimated_amount:'1 个',calories:75,protein:6,carbs:1,fat:5}]};
+  outputs.push(corrected);
+  const edited=await request(`/api/meals/${added.payload.meal.id}`,'PUT',{type:'早餐',description:'鸡蛋 1 个'});
+  assert.equal(edited.payload.state.today.calories,0);
+  assert.equal(edited.payload.state.archives[yesterday].calories,75);
+}));
+
+test('a meal recorded by chat can be changed in History without duplicating it',async()=>withServer(async({request,outputs})=>{
+  await request('/api/profile','PUT',{profile,timezone:'Asia/Shanghai'});
+  outputs.push(turn('consumed',egg));
+  await request('/api/chat','POST',{requestId:'chat-before-manual-1',text:'早餐吃了两个鸡蛋'});
+  const prior=(await request('/api/state')).payload;
+  const id=prior.meals[0].id;
+  const corrected={...egg,calories:75,calorie_min:70,calorie_max:80,protein:6,carbs:1,fat:5,food_items:[{...egg.food_items[0],estimated_amount:'1 个',calories:75,protein:6,carbs:1,fat:5}]};
+  outputs.push(corrected);
+  const edited=await request(`/api/meals/${id}`,'PUT',{type:'午餐',description:'鸡蛋 1 个'});
+  assert.equal(edited.status,200);
+  assert.equal(edited.payload.state.meals.length,1);
+  assert.equal(edited.payload.state.meals[0].id,id);
+  assert.equal(edited.payload.state.meals[0].type,'午餐');
+  assert.equal(edited.payload.state.today.calories,75);
+  assert.equal(edited.payload.state.messages.length,2);
+  assert.equal((await request('/api/export')).payload.revisions.length,1);
 }));
 
 test('photo uses Flash for vision then Pro for reasoning',async()=>withServer(async({request,outputs,calls})=>{

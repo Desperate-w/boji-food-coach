@@ -224,6 +224,48 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .history-conversation .message-list { margin-top: 21px; gap: 20px; }
 .history-conversation .message.user { padding-left: 35px; }
 .history-conversation .receipt { box-shadow: none; }
+.history-nutrition { background: white; border: 1px solid var(--line); border-radius: 20px; padding: 23px 25px; margin-bottom: 16px; }
+.history-detail .history-nutrition { border: 0; border-radius: 0; padding: 0; }
+.history-nutrition-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.history-nutrition-head h3 { font-size: 18px; letter-spacing: -.04em; margin: 8px 0 0; }
+.history-macro-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; }
+.history-macro { grid-column: span 2; min-width: 0; border: 1px solid #e9eee8; background: #fafcf9; border-radius: 12px; padding: 12px 13px; }
+.history-macro.primary { grid-column: span 3; background: #f2f7f2; border-color: #deeadf; }
+.history-macro > span, .history-macro em { display: block; color: #748076; font-size: 10px; font-style: normal; }
+.history-macro strong { display: block; color: #294b37; font-size: 20px; letter-spacing: -.05em; font-variant-numeric: tabular-nums; margin: 6px 0 3px; }
+.history-macro strong small { font-size: 11px; letter-spacing: 0; font-weight: 500; }
+.history-macro.primary strong { font-size: 27px; }
+.history-goal-line { display: flex; justify-content: space-between; gap: 10px; padding: 13px 1px 0; font-size: 11px; color: var(--muted); }
+.history-goal-line strong { color: #3b6550; text-align: right; font-weight: 700; }
+.history-nutrition .range-track, .history-nutrition .protein-track { height: 6px; margin-top: 7px; }
+.history-nutrition-note { margin: 16px 0 0; color: #8b978d; font-size: 10px; line-height: 1.5; }
+.meal-board { background: white; border: 1px solid var(--line); border-radius: 20px; padding: 23px 25px 25px; }
+.history-detail .meal-board { border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 24px 0 0; }
+.meal-board-heading { margin-bottom: 17px; }
+.meal-board-heading p { color: var(--muted); font-size: 11px; margin: 8px 0 0; line-height: 1.6; }
+.meal-slot-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.meal-slot { min-width: 0; border: 1px solid #e7ece5; background: #fdfefd; border-radius: 14px; padding: 15px; }
+.meal-slot-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid #ebefea; }
+.meal-slot-heading h3 { margin: 0; font-size: 13px; letter-spacing: -.02em; }
+.meal-slot-heading .text-button, .meal-entry-top .text-button { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+.meal-slot-heading .text-button svg { width: 13px; height: 13px; }
+.meal-slot-empty { color: #a1aba2; font-size: 11px; padding: 15px 0 2px; margin: 0; }
+.meal-entry { padding: 12px 0 3px; border-bottom: 1px solid #edf0ec; }
+.meal-entry:last-child { border: 0; }
+.meal-entry-top { display: flex; justify-content: space-between; align-items: baseline; gap: 9px; }
+.meal-entry-top strong { font-size: 12px; color: #304e3b; min-width: 0; overflow-wrap: anywhere; }
+.meal-foods { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.meal-foods span { background: #edf3ee; color: #54705c; border-radius: 6px; padding: 4px 6px; font-size: 10px; overflow-wrap: anywhere; }
+.meal-entry-nutrition { display: flex; flex-wrap: wrap; gap: 3px 9px; color: #69796c; font-size: 10px; font-variant-numeric: tabular-nums; }
+.history-archive { margin-top: 27px; }
+.history-archive > .eyebrow { display: block; margin-bottom: 12px; }
+.history-archive-empty { color: #9aa69c; font-size: 11px; margin: 0; padding: 14px 2px; }
+.meal-editor form { display: grid; gap: 16px; }
+.meal-editor .field textarea { width: 100%; resize: vertical; min-height: 118px; border: 1px solid #dce5da; border-radius: 10px; background: #fcfdfb; padding: 11px 12px; color: var(--ink); line-height: 1.55; outline: 0; }
+.meal-editor .field textarea:focus { border-color: #80b491; }
+.meal-editor-actions { display: flex; justify-content: end; gap: 9px; }
+.modal .meal-editor-error { color: #ad4e39; margin: 0; }
+.modal .meal-editor-note { margin: 16px 0 0; font-size: 10px; }
 
 .profile-hero { border-radius: 21px; color: white; background: #285745; padding: 26px 27px; position: relative; overflow: hidden; }
 .profile-hero::after { content: ''; position: absolute; width: 190px; height: 190px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16); right: -44px; top: -70px; box-shadow: 0 0 0 38px rgba(255,255,255,.035), 0 0 0 80px rgba(255,255,255,.025); }
@@ -415,6 +457,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .page-heading h1 { font-size: 25px; }
   .profile-grid { grid-template-columns: 1fr; }
   .history-detail { padding: 20px; }
+  .history-nutrition, .meal-board { padding: 19px 17px; }
+  .meal-slot-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

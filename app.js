@@ -43,7 +43,7 @@
       attachment:null, draft:'', currentFeedback:null, pending:null, requestError:null,
       connection:{mode:'checking', model:'', provider:''},
       serverToday:null, retryRequestId:null, retrySource:null, importBackup:null, memories:[], memoryDraft:'', memoryEditId:null,
-      profile:null, meals:[], messages:[],
+      profile:null, meals:[], messages:[], mealDraft:null, mealSaving:false, mealError:'',
     };
   }
 
@@ -209,23 +209,60 @@
 
   function historyFor(day) {
     if (day==='today') {
-      const t=totals();return {title:'今天',day:String(new Date().getDate()),month:`${new Date().getMonth()+1}月`,calories:t.calories,protein:t.protein,status:status(),summary:advice(),meals:state.meals.map(m=>[m.type,m.name,m.calories,m.protein,m.id]),messages:state.messages};
+      const t=totals();return {title:'今天',day:String(new Date().getDate()),month:`${new Date().getMonth()+1}月`,date:state.activeDate,...t,plan:state.profile,status:status(),summary:advice(),meals:state.meals,messages:state.messages};
     }
     const date=new Date(`${day}T12:00:00`);
     const archived=state.archives?.[dateKey(date)];
     const title=`${date.getMonth()+1}月${date.getDate()}日`;
-    return {title,day:String(date.getDate()),month:`${date.getMonth()+1}月`,calories:archived.calories,protein:archived.protein,status:archived.status,summary:archived.summary,meals:archived.meals.map(m=>[m.type,m.name,m.calories,m.protein,m.id]),messages:archived.messages||[]};
+    const sum=mealTotals(archived.meals||[]);
+    return {title,day:String(date.getDate()),month:`${date.getMonth()+1}月`,date:day,...sum,plan:archived.plan||null,status:archived.status,summary:archived.summary,meals:archived.meals||[],messages:archived.messages||[]};
+  }
+  function mealTotals(meals) {
+    return meals.reduce((sum,meal)=>({calories:sum.calories+(meal.calories||0),protein:sum.protein+(meal.protein||0),carbs:sum.carbs+(meal.carbs||0),fat:sum.fat+(meal.fat||0),fiber:sum.fiber+(meal.fiber||0)}),{calories:0,protein:0,carbs:0,fat:0,fiber:0});
+  }
+  function renderHistoryNutrition(d) {
+    const p=d.plan;
+    const calorieText=p?(d.meals.length?d.calories<p.caloriesMin?`距建议下限 ${fmt(p.caloriesMin-d.calories)} kcal`:d.calories<=p.caloriesMax?'处于建议范围':`高出建议上限 ${fmt(d.calories-p.caloriesMax)} kcal`:'等待第一顿记录'):'暂无该日目标';
+    const proteinText=p?(d.meals.length?d.protein>=p.proteinTarget?'已达到目标':`完成 ${Math.round(d.protein/Math.max(1,p.proteinTarget)*100)}% · 还差 ${fmt(p.proteinTarget-d.protein)}g`:'等待第一顿记录'):'暂无该日目标';
+    const scale=p?Math.max(1,p.caloriesMax+300):1;
+    const caloriePct=p?Math.min(100,Math.max(0,Math.round(d.calories/scale*100))):0;
+    const targetStart=p?Math.min(100,Math.max(0,Math.round(p.caloriesMin/scale*100))):0;
+    const targetWidth=p?Math.max(1,Math.min(100-targetStart,Math.round((p.caloriesMax-p.caloriesMin)/scale*100))):0;
+    const proteinPct=p?Math.min(100,Math.max(0,Math.round(d.protein/Math.max(1,p.proteinTarget)*100))):0;
+    return `<section class="history-nutrition" aria-label="${escapeHtml(d.title)}营养汇总"><div class="history-nutrition-head"><div><span class="eyebrow">NUTRITION / 摄入与目标</span><h3>${escapeHtml(d.title)}的营养进度</h3></div><span class="status-badge"><span class="status-dot"></span>${escapeHtml(d.status)}</span></div><div class="history-macro-grid">
+      <div class="history-macro primary"><span>热量</span><strong>${fmt(d.calories)} <small>kcal</small></strong><em>${p?`建议 ${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal`:'估算摄入'}</em></div>
+      <div class="history-macro primary"><span>蛋白质</span><strong>${fmt(d.protein)} <small>g</small></strong><em>${p?`目标约 ${fmt(p.proteinTarget)}g`:'估算摄入'}</em></div>
+      <div class="history-macro"><span>碳水</span><strong>${fmt(d.carbs)} <small>g</small></strong><em>${p?`参考约 ${fmt(p.carbsTarget)}g`:'估算摄入'}</em></div>
+      <div class="history-macro"><span>脂肪</span><strong>${fmt(d.fat)} <small>g</small></strong><em>${p?`参考约 ${fmt(p.fatTarget)}g`:'估算摄入'}</em></div>
+      <div class="history-macro"><span>膳食纤维</span><strong>${fmt(d.fiber)} <small>g</small></strong><em>估算摄入</em></div></div>
+      <div class="history-goal-line"><span>热量区间</span><strong>${calorieText}</strong></div>${p?`<div class="range-track ${d.calories>p.caloriesMax?'is-over':''}" role="img" aria-label="热量 ${fmt(d.calories)} 千卡，建议范围 ${fmt(p.caloriesMin)} 到 ${fmt(p.caloriesMax)} 千卡"><div class="range-target" style="left:${targetStart}%;width:${targetWidth}%"></div><div class="range-fill" style="width:${caloriePct}%"></div></div>`:''}<div class="history-goal-line"><span>蛋白质进度</span><strong>${proteinText}</strong></div>${p?`<div class="protein-track" role="progressbar" aria-label="${escapeHtml(d.title)}蛋白质" aria-valuemin="0" aria-valuemax="${Math.round(p.proteinTarget)}" aria-valuenow="${Math.round(Math.min(d.protein,p.proteinTarget))}"><div class="protein-fill" style="width:${proteinPct}%"></div></div>`:''}<p class="history-nutrition-note">营养数值是估算；碳水和脂肪为参考分配，无需刻意吃满。</p></section>`;
+  }
+  function renderMealBoard(d,day) {
+    const types=['早餐','午餐','晚餐','加餐'];
+    return `<section class="meal-board" aria-label="${escapeHtml(d.title)}餐食记录"><div class="meal-board-heading"><div class="eyebrow">MEALS / 餐食记录</div><p>对话中记下的食物会自动放进对应餐次；也可以在这里添加或修改。</p></div><div class="meal-slot-grid">${types.map(type=>{
+      const meals=d.meals.filter(meal=>meal.type===type||(!types.includes(meal.type)&&type==='加餐'));
+      return `<section class="meal-slot"><div class="meal-slot-heading"><h3>${type}</h3><button class="text-button" data-action="meal-open" data-day="${escapeHtml(day)}" data-type="${type}" aria-label="添加${type}餐食">${icon('plus')} 添加</button></div>${meals.length?meals.map(meal=>{
+        const foods=meal.foodItems?.length?meal.foodItems.map(item=>`${item.food_name}${item.estimated_amount?` ${item.estimated_amount}`:''}`):[meal.name];
+        return `<article class="meal-entry"><div class="meal-entry-top"><strong>${escapeHtml(meal.name)}</strong><button class="text-button" data-action="meal-open" data-day="${escapeHtml(day)}" data-type="${type}" data-meal="${escapeHtml(meal.id)}" aria-label="修改${escapeHtml(meal.name)}">修改</button></div><div class="meal-foods">${foods.map(food=>`<span>${escapeHtml(food)}</span>`).join('')}</div><div class="meal-entry-nutrition">${fmt(meal.calories)} kcal <span>蛋白质 ${fmt(meal.protein)}g</span><span>碳水 ${fmt(meal.carbs||0)}g</span><span>脂肪 ${fmt(meal.fat||0)}g</span></div></article>`;
+      }).join(''):'<p class="meal-slot-empty">还没有记录</p>'}</section>`;
+    }).join('')}</div></section>`;
   }
   function renderHistoryDetail() {
     const d=historyFor(state.historyDetail);
+    const currentMeals=new Map([...state.meals,...Object.values(state.archives||{}).flatMap(archive=>archive.meals||[])].map(meal=>[meal.id,meal]));
     const conversation=d.messages.length
-      ? `<section class="history-conversation"><div class="eyebrow">CONVERSATION / 当天交流</div><div class="message-list">${d.messages.map(m=>renderMessage(m,state.connection.mode==='live')).join('')}</div></section>` : '';
-    return `<div class="history-detail"><button class="back-button" data-action="history-back">${icon('arrowLeft')} 返回历史</button><h2>${d.title}的饮食</h2><p>${d.status} · ${d.meals.length} 条饮食记录${conversation?` · ${d.messages.length} 条交流`:''}</p><div class="history-summary"><div><strong>${fmt(d.calories)}</strong><span>kcal</span></div><div><strong>${fmt(d.protein)}</strong><span>g 蛋白质</span></div></div><div class="eyebrow">MEALS / 当天餐次</div>${d.meals.map(m=>`<div class="meal-row"><div><strong>${escapeHtml(m[0])} · ${escapeHtml(m[1])}</strong><small>蛋白质约 ${fmt(m[3])}g</small></div><span>约 ${fmt(m[2])} kcal${state.connection.mode==='live'?` <button class="text-button" data-action="correct-meal" data-meal="${escapeHtml(m[4])}">修正</button>`:''}</span></div>`).join('')}<div class="history-ai">${icon('spark')}　${escapeHtml(d.summary)}</div>${conversation}</div>`;
+      ? `<section class="history-conversation"><div class="eyebrow">CONVERSATION / 当天交流</div><div class="message-list">${d.messages.map(m=>{
+          const latest=m.receipt&&currentMeals.get(m.receipt.id);
+          const changed=latest&&(latest.name!==m.receipt.name||latest.type!==m.receipt.type||latest.calories!==m.receipt.calories||latest.protein!==m.receipt.protein);
+          return renderMessage(changed?{...m,receipt:latest,revised:true,after:'这顿后来已修改；请以当前餐次和营养汇总为准。'}:m,state.connection.mode==='live');
+        }).join('')}</div></section>` : '';
+    return `<div class="history-detail"><button class="back-button" data-action="history-back">${icon('arrowLeft')} 返回历史</button>${renderHistoryNutrition(d)}${renderMealBoard(d,state.historyDetail)}<div class="history-ai">${icon('spark')}　${escapeHtml(d.summary)}</div>${conversation}</div>`;
   }
   function renderHistory() {
     if (state.historyDetail && state.historyDetail!=='today' && !state.archives?.[state.historyDetail]) state.historyDetail=null;
-    const entries=[...(state.meals.length||state.messages.length?['today']:[]),...Object.keys(state.archives||{}).sort().reverse()];
-    return `<div class="page">${renderTopbar()}<main class="section-page"><div class="section-inner"><div class="page-heading"><div class="eyebrow">YOUR DAYS / 饮食历史</div><h1>每天都更了解自己一点。</h1><p>回看每一天吃了什么，也能找到当天的交流记录。</p></div>${state.historyDetail?renderHistoryDetail():entries.length?`<div class="history-list">${entries.map(day=>{const d=historyFor(day);return `<button class="history-card" data-action="history-day" data-day="${day}"><span class="history-date"><strong>${d.day}</strong><span>${d.month}</span></span><span class="history-info"><strong>${d.title} <span class="status-badge"><span class="status-dot"></span>${d.status}</span></strong><small>${fmt(d.calories)} kcal　·　蛋白质 ${fmt(d.protein)}g　·　${d.meals.length} 餐${d.messages.length?`　·　${d.messages.length} 条交流`:''}</small></span>${icon('chevron')}</button>`}).join('')}</div>`:`<div class="history-empty">${icon('calendar')}<h2>还没有饮食历史</h2><p>记录一顿饭或发起一次咨询后，可以在这里回看。</p><button class="primary-button" data-action="nav" data-view="chat">去今天看看</button></div>`}</div></main></div>`;
+    const entries=Object.keys(state.archives||{}).sort().reverse();
+    const today=historyFor('today');
+    return `<div class="page">${renderTopbar()}<main class="section-page"><div class="section-inner"><div class="page-heading"><div class="eyebrow">YOUR DAYS / 饮食历史</div><h1>每天都更了解自己一点。</h1><p>按餐次整理吃过的食物，随时补记或修改。</p></div>${state.historyDetail?renderHistoryDetail():`${renderHistoryNutrition(today)}${renderMealBoard(today,'today')}<section class="history-archive"><div class="eyebrow">PAST DAYS / 过去的日子</div>${entries.length?`<div class="history-list">${entries.map(day=>{const d=historyFor(day);return `<button class="history-card" data-action="history-day" data-day="${day}"><span class="history-date"><strong>${d.day}</strong><span>${d.month}</span></span><span class="history-info"><strong>${d.title} <span class="status-badge"><span class="status-dot"></span>${escapeHtml(d.status)}</span></strong><small>${fmt(d.calories)} kcal　·　蛋白质 ${fmt(d.protein)}g　·　${d.meals.length} 餐${d.messages.length?`　·　${d.messages.length} 条交流`:''}</small></span>${icon('chevron')}</button>`}).join('')}</div>`:'<p class="history-archive-empty">过去的记录会显示在这里。</p>'}</section>${today.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的完整交流 ${icon('chevron')}</button>`:''}`}</div></main></div>`;
   }
   function renderProfileMemories() {
     if (state.connection.mode!=='live') return '';
@@ -256,6 +293,10 @@
   }
   function renderModal() {
     if (!state.modal) return '';
+    if (state.modal==='meal') {
+      const d=state.mealDraft;
+      return `<div class="modal-backdrop"><div class="modal meal-editor" role="dialog" aria-modal="true" aria-label="${d.id?'修改':'添加'}餐食"><div class="modal-top"><div><div class="eyebrow">MEAL / ${d.date==='today'?'今天':escapeHtml(d.date)}</div><h2>${d.id?'修改这顿吃了什么':'添加一顿餐食'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭" ${state.mealSaving?'disabled':''}>${icon('close')}</button></div><p>写下食物名称和大致份量，每行一种食物。保存后会重新估算这顿并更新当日进度。</p><form id="meal-form"><label class="field">餐次<select id="meal-type" ${state.mealSaving?'disabled':''}>${['早餐','午餐','晚餐','加餐'].map(type=>`<option value="${type}" ${d.type===type?'selected':''}>${type}</option>`).join('')}</select></label><label class="field">吃了什么<textarea id="meal-description" rows="5" maxlength="1000" placeholder="例如：鸡蛋 2 个&#10;吐司 2 片" ${state.mealSaving?'disabled':''}>${escapeHtml(d.description)}</textarea></label>${state.mealError?`<p class="meal-editor-error" role="alert">${escapeHtml(state.mealError)}</p>`:''}<div class="meal-editor-actions"><button type="button" class="secondary-button" data-action="close-modal" ${state.mealSaving?'disabled':''}>取消</button><button type="submit" class="primary-button" ${state.mealSaving?'disabled':''}>${state.mealSaving?'正在估算并保存…':'保存并更新进度'}</button></div></form><p class="meal-editor-note">${state.connection.mode==='live'?'食物描述会发送给 DeepSeek 估算，结果保存到本机。':'当前为前端预览，营养值是本地模拟估算。'}</p></div></div>`;
+    }
     if (state.modal==='memory') return `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="编辑长期习惯"><div class="modal-top"><div><div class="eyebrow">HABIT / 长期习惯</div><h2>${state.memoryEditId?'修改习惯':'添加习惯'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><label class="field voice-field">饮食习惯<textarea id="memory-text" maxlength="200" rows="3" placeholder="例如：平时喝无糖拿铁">${escapeHtml(state.memoryDraft)}</textarea></label><div class="voice-actions"><button class="primary-button" data-action="memory-save">保存习惯</button></div></div></div>`;
     if (state.modal==='import') return `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="导入旧记录"><div class="modal-top"><div><div class="eyebrow">IMPORT / 导入记录</div><h2>选择要迁入的内容</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><p>旧版餐食是演示估算，导入后会标注来源，不会覆盖现有记录。文件：${escapeHtml(state.importBackup?.fileName||'')}</p><div class="voice-actions"><button class="secondary-button" data-action="import-select" data-mode="profile">仅身体资料</button><button class="secondary-button" data-action="import-select" data-mode="records">仅饮食与交流</button><button class="primary-button" data-action="import-select" data-mode="all">全部导入</button></div></div></div>`;
     if (state.modal==='voice') {
@@ -317,6 +358,49 @@
     else if (/火锅/.test(text)) m={name:'火锅', calories:800, protein:44, carbs:50, fat:45, fiber:7, min:650, max:950};
     else m={name:'一顿饮食（演示估算）', calories:520, protein:27, carbs:60, fat:19, fiber:5, min:450, max:600};
     return {id:uid(), type:inferMealType(text), ...m, time:timeNow(), input:text||'上传了一张食物照片'};
+  }
+  function saveDemoMealDraft(d) {
+    const parts=d.description.split(/[\n,，、]+/).map(part=>part.trim()).filter(Boolean);
+    if (!parts.length) throw new Error('请填写至少一种食物。');
+    const foodItems=parts.map(part=>{
+      const estimate=estimateMeal(part,false);
+      return {food_name:part,estimated_amount:'演示估算',calories:estimate.calories,protein:estimate.protein,carbs:estimate.carbs,fat:estimate.fat,fiber:estimate.fiber,confidence:'low'};
+    });
+    const sum=mealTotals(foodItems);
+    const list=d.date==='today'?state.meals:state.archives[d.date].meals;
+    const index=d.id?list.findIndex(meal=>meal.id===d.id):-1;
+    if (d.id&&index<0) throw new Error('找不到要修改的餐食，请刷新页面重试。');
+    const prior=index>=0?list[index]:null;
+    const meal={id:prior?.id||uid(),type:d.type,name:parts.join(' · ').slice(0,100),...sum,foodItems,time:prior?.time||timeNow(),input:d.description,source:'manual-demo',importedDemo:true};
+    if (index>=0) list[index]=meal; else list.push(meal);
+    if (d.date!=='today') {
+      const archive=state.archives[d.date], daily=mealTotals(list);
+      Object.assign(archive,daily,{status:'已更新',summary:'这一天的餐食和营养汇总已更新。'});
+    }
+  }
+  async function saveMealDraft() {
+    const d=state.mealDraft;
+    if (!d||state.mealSaving) return;
+    const description=document.getElementById('meal-description')?.value.trim()||'';
+    const type=document.getElementById('meal-type')?.value||d.type;
+    state.mealDraft={...d,type,description};
+    if (!description) {state.mealError='请先填写吃了什么。';render();return;}
+    if (['checking','unavailable'].includes(state.connection.mode)&&/^https?:$/.test(window.location?.protocol||'')) {state.mealError='本地服务尚未就绪，请稍后刷新重试。';render();return;}
+    state.mealSaving=true;state.mealError='';render();
+    try {
+      if (state.connection.mode==='live') {
+        const response=await fetch(d.id?`/api/meals/${encodeURIComponent(d.id)}`:'/api/meals',{
+          method:d.id?'PUT':'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({date:d.date==='today'?state.activeDate:d.date,type,description}),
+        });
+        const payload=await response.json();
+        if (!response.ok) throw new Error(payload.error||'保存失败，请重试。');
+        applyServerState(payload.state);
+      } else saveDemoMealDraft({...d,type,description});
+      state.currentFeedback=null;state.modal=null;state.mealDraft=null;
+      render();toast(d.id?'餐食已修改，营养进度已更新':'餐食已添加，营养进度已更新');
+    } catch(error) {state.mealSaving=false;state.mealError=error.message||'保存失败，请重试。';render();}
+    finally {state.mealSaving=false;}
   }
   function classify(text, withPhoto) {
     if (state.correctionTarget || (/(其实|刚才|不是|没那么多|更正|改成)/.test(text) && state.meals.length)) return 'correction';
@@ -515,6 +599,14 @@
     if (action==='nav') {state.view=button.dataset.view;state.historyDetail=null;state.currentFeedback=null;render();window.scrollTo(0,0);}
     else if (action==='history-day') {state.view='history';state.historyDetail=button.dataset.day;state.currentFeedback=null;render();window.scrollTo(0,0);}
     else if (action==='history-back') {state.historyDetail=null;render();}
+    else if (action==='meal-open') {
+      const day=button.dataset.day||'today',type=button.dataset.type||'加餐',id=button.dataset.meal||null;
+      const list=day==='today'?state.meals:state.archives?.[day]?.meals||[];
+      const meal=id?list.find(entry=>entry.id===id):null;
+      if (id&&!meal) return toast('找不到这顿餐食，请刷新页面重试。');
+      state.mealDraft={id,date:day,type:meal?.type||type,description:meal?.importedDemo?(meal.input||meal.name):meal?.foodItems?.length?meal.foodItems.map(item=>`${item.food_name}${item.estimated_amount?` ${item.estimated_amount}`:''}`).join('\n'):meal?.input||''};
+      state.mealError='';state.mealSaving=false;state.modal='meal';render();requestAnimationFrame(()=>document.getElementById('meal-description')?.focus());
+    }
     else if (action==='expand-today') {state.expanded=!state.expanded;render();}
     else if (action==='dismiss-feedback') {state.currentFeedback=null;render();}
     else if (action==='toggle-pending-reasoning' && state.pending) {state.pending.reasoningOpen=!state.pending.reasoningOpen;render();}
@@ -562,7 +654,7 @@
         applyServerState(payload.state);state.importBackup=null;state.modal=null;render();toast(`已导入 ${payload.importedMeals} 餐、${payload.importedMessages} 条交流`);
       } catch(error) {toast(error.message||'导入失败');}
     }
-    else if (action==='close-modal') {if (state.modal==='voice') cancelVoiceRecognition();state.modal=null;render();}
+    else if (action==='close-modal'&&!state.mealSaving) {if (state.modal==='voice') cancelVoiceRecognition();state.modal=null;state.mealDraft=null;render();}
     else if (action==='onboard-back') {state.onboardStep=Math.max(0,state.onboardStep-1);render();}
     else if (action==='onboard-next') handleOnboardNext();
     else if (action==='select-goal') {state.onboardingDraft.goal=button.dataset.value;render();}
@@ -582,9 +674,10 @@
     }
     else if (action==='reset' && window.confirm('这会清空当前浏览器里的建档、饮食和交流记录。确定重新开始吗？')) {state=seedState();render();toast('已清空本机演示记录');}
   });
-  document.addEventListener('submit', e => { if (e.target.id==='chat-form') {e.preventDefault();sendMessage(document.getElementById('message-input').value);} });
+  document.addEventListener('submit', e => { if (e.target.id==='chat-form') {e.preventDefault();sendMessage(document.getElementById('message-input').value);} else if (e.target.id==='meal-form') {e.preventDefault();saveMealDraft();} });
   document.addEventListener('input', e => {
     if (e.target.id==='message-input') state.draft=e.target.value;
+    if (e.target.id==='meal-description'&&state.mealDraft) state.mealDraft.description=e.target.value;
     if (e.target.id==='memory-text') state.memoryDraft=e.target.value;
     if (e.target.id==='voice-transcript') {state.voiceTranscript=e.target.value;const use=document.querySelector('[data-action="voice-use"]');if (use) use.disabled=!state.voiceTranscript.trim();}
     const key={'ob-gender':'gender','ob-age':'age','ob-height':'height','ob-weight':'weight'}[e.target.id];
@@ -592,6 +685,7 @@
   });
   document.addEventListener('change', e => {
     if (e.target.id==='ob-gender') {state.onboardingDraft.gender=e.target.value;persist();}
+    if (e.target.id==='meal-type'&&state.mealDraft) state.mealDraft.type=e.target.value;
   });
   document.addEventListener('keydown', e => { if (e.target.id==='message-input'&&e.key==='Enter'&&!e.shiftKey) {e.preventDefault();sendMessage(e.target.value);} });
   function preparePhoto(file) {

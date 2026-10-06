@@ -189,7 +189,7 @@ function validateResult(result) {
   if (!result || !['consumed', 'planned', 'question', 'correction', 'clarify'].includes(result.action) || typeof result.reply !== 'string' || !result.reply.trim()) throw new Error('模型回复格式不完整');
   if (['consumed', 'correction'].includes(result.action)) {
     const m = result.meal;
-    if (!m || !m.name || !['早餐', '午餐', '晚餐', '加餐'].includes(m.type)) throw new Error('模型没有返回可用的餐次');
+    if (!m || typeof m.name!=='string' || !m.name.trim() || m.name.length>200 || !['早餐', '午餐', '晚餐', '加餐'].includes(m.type)) throw new Error('模型没有返回可用的餐次');
     for (const field of ['calories', 'protein', 'carbs', 'fat', 'fiber']) {
       if (!Number.isInteger(m[field]) || m[field] < 0 || m[field] > 10000) throw new Error('模型返回的营养数据无效');
     }
@@ -267,6 +267,32 @@ async function describeImage(image, {apiKey, visionModel, fetchImpl, signal}) {
   return description.slice(0,3000);
 }
 
+async function estimateManualMeal({apiKey,model,fetchImpl,description,type,profile}) {
+  const response=await fetchImpl('https://api.deepseek.com/responses',{
+    method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},
+    body:JSON.stringify({model,reasoning:{effort:'high'},max_output_tokens:8000,
+      instructions:'你是饮食记录的营养估算助手。用户已经吃了输入中的食物。只按用户提供的食物名称和份量估算，不添加未提及的食物。food_items 分别列出主要食物；整餐数据为各食物项之和。无法确定份量时使用常见份量的保守约值，并用热量区间表达不确定性。type 必须使用用户指定的餐次。不要做医学诊断。',
+      input:[{role:'user',content:[{type:'input_text',text:JSON.stringify({type,description,goal:profile.goal})}]}],
+      text:{format:{type:'json_schema',name:'manual_meal',schema:mealSchema}}}),
+  });
+  if (!response.ok) throw new Error(apiErrorMessage(response.status,await response.text()));
+  const payload=await response.json();
+  if (payload.status!=='completed') throw new Error('餐食估算没有完成，请重试。');
+  let data;
+  try {data=JSON.parse(extractOutputText(payload));}
+  catch {throw new Error('模型没有返回可用的餐食估算，请重试。');}
+  validateResult({action:'consumed',reply:'已估算',meal:data});
+  data.type=type;
+  return data;
+}
+
+function validMealDate(date,today) {
+  if (typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const parsed=Date.parse(`${date}T12:00:00Z`);
+  return Number.isFinite(parsed)&&new Date(parsed).toISOString().slice(0,10)===date
+    && date<=today&&parsed>=Date.parse(`${today}T12:00:00Z`)-365*86400000;
+}
+
 function json(res, status, data) {
   res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
   res.end(JSON.stringify(data));
@@ -311,6 +337,27 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         const profile=store.saveProfile(body.profile||body,body.timezone);
         json(res,200,{profile,state:store.state()});
       } catch(error) { json(res,error.status||500,{error:error.message||'保存资料失败'}); }
+      return;
+    }
+    const manualRoute=/^\/api\/meals(?:\/([a-f0-9-]{36}))?$/.exec(req.url);
+    if (manualRoute && ((req.method==='POST'&&!manualRoute[1])||(req.method==='PUT'&&manualRoute[1]))) {
+      try {
+        if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
+        const body=await readRequestJson(req);
+        const profile=store.profile();
+        if (!profile) return json(res,409,{error:'请先完成建档。'});
+        const target=manualRoute[1]?store.manualTarget(manualRoute[1]):null;
+        if (manualRoute[1]&&!target) return json(res,404,{error:'找不到要修改的餐食。'});
+        const date=target?.date||body.date;
+        if (!validMealDate(date,store.today())) return json(res,400,{error:'只能记录或修改过去一年内的日期。'});
+        if (!['早餐','午餐','晚餐','加餐'].includes(body.type)) return json(res,400,{error:'请选择早餐、午餐、晚餐或加餐。'});
+        if (typeof body.description!=='string'||!body.description.trim()||body.description.trim().length>1000) return json(res,400,{error:'请填写 1–1000 字的食物和份量。'});
+        if (!apiKey) return json(res,503,{error:'请先配置 DeepSeek API Key，才能估算手动填写的餐食。'});
+        const description=body.description.trim();
+        const data=await estimateManualMeal({apiKey,model,fetchImpl,description,type:body.type,profile});
+        const meal=store.saveManualMeal({id:manualRoute[1]||null,date,type:body.type,description,data});
+        json(res,manualRoute[1]?200:201,{meal,state:store.state()});
+      } catch(error) {json(res,error.status||500,{error:error.message||'保存餐食失败'});}
       return;
     }
     if (req.method === 'POST' && req.url === '/api/import') {

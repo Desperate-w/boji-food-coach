@@ -124,6 +124,31 @@ class Store {
       : this.db.prepare('SELECT date,payload_json FROM meal ORDER BY created_at,id').all();
     return rows.map(row => date ? parse(row.payload_json) : {...parse(row.payload_json), date:row.date});
   }
+  manualTarget(id) {
+    const row=this.db.prepare('SELECT date,payload_json FROM meal WHERE id=?').get(id);
+    return row?{date:row.date,meal:parse(row.payload_json)}:null;
+  }
+  saveManualMeal({id,date,type,description,data}) {
+    const prior=id?this.manualTarget(id):null;
+    if (id&&!prior) {const error=new Error('找不到要修改的餐食。');error.status=404;throw error;}
+    const targetDate=prior?.date||date;
+    const timestamp=now();
+    const displayTime=new Date(timestamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:this.timeZone()});
+    const meal={id:id||uid(),type,name:data.name,calories:data.calories,protein:data.protein,carbs:data.carbs,fat:data.fat,fiber:data.fiber,
+      ...(data.calorie_min!==null&&data.calorie_max!==null?{min:data.calorie_min,max:data.calorie_max}:{}),
+      time:prior?.meal.time||displayTime,input:description,foodItems:data.food_items,source:'manual'};
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (prior) {
+        this.db.prepare('INSERT INTO meal_revision(id,meal_id,changed_at,before_json,after_json,reason) VALUES(?,?,?,?,?,?)').run(uid(),id,timestamp,JSON.stringify(prior.meal),JSON.stringify(meal),'用户在饮食历史中手动修改');
+        this.db.prepare('UPDATE meal SET input_text=?,source=?,payload_json=?,updated_at=? WHERE id=?').run(description,'manual',JSON.stringify(meal),timestamp,id);
+        this.db.prepare('DELETE FROM food_item WHERE meal_id=?').run(id);
+      } else this.db.prepare('INSERT INTO meal(id,date,created_at,updated_at,input_text,source,plan_version,payload_json) VALUES(?,?,?,?,?,?,?,?)').run(meal.id,targetDate,timestamp,timestamp,description,'manual',this.planVersionFor(targetDate),JSON.stringify(meal));
+      for (let index=0;index<data.food_items.length;index++) this.db.prepare('INSERT INTO food_item(id,meal_id,position,payload_json) VALUES(?,?,?,?)').run(uid(),meal.id,index,JSON.stringify(data.food_items[index]));
+      this.db.exec('COMMIT');
+    } catch(error) {this.db.exec('ROLLBACK');throw error;}
+    return meal;
+  }
   messages(date) {
     const rows = date ? this.db.prepare('SELECT payload_json FROM conversation_message WHERE date=? ORDER BY created_at,rowid').all(date)
       : this.db.prepare('SELECT date,payload_json FROM conversation_message ORDER BY created_at,rowid').all();
@@ -161,7 +186,7 @@ class Store {
       const meals = allMeals.filter(row => row.date === day).map(({date:unused, ...rest}) => rest);
       const messages = allMessages.filter(row => row.date === day).map(({date:unused, ...rest}) => rest);
       const sum = totals(meals), plan = this.planFor(day);
-      archives[day] = {date:day, meals, messages, ...sum, status:dailyStatus(meals,plan), summary:dailyAdvice(meals,plan)};
+      archives[day] = {date:day, meals, messages, ...sum, plan, status:dailyStatus(meals,plan), summary:dailyAdvice(meals,plan)};
     }
     const meals = allMeals.filter(row => row.date === date).map(({date:unused,...rest}) => rest);
     const messages = allMessages.filter(row => row.date === date).map(({date:unused,...rest}) => rest);
