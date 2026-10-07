@@ -115,6 +115,80 @@ test('manual History add and edit refresh nutrition totals and keep a revision',
   assert.equal((await request('/api/meals','POST',{date:'2026-02-30',type:'早餐',description:'鸡蛋'})).status,400);
 }));
 
+test('deleting one meal recalculates Today, marks its conversation, and cannot be replayed into existence',async()=>withServer(async({request,outputs,calls})=>{
+  await request('/api/profile','PUT',{profile,timezone:'Asia/Shanghai'});
+  outputs.push(turn('consumed',egg));
+  const body={requestId:'delete-meal-turn-1',text:'刚吃了两个鸡蛋'};
+  await request('/api/chat','POST',body);
+  const before=(await request('/api/state')).payload;
+  const id=before.meals[0].id;
+  const removed=await request(`/api/meals/${id}`,'DELETE');
+  assert.equal(removed.status,200);
+  assert.equal(removed.payload.state.today.calories,0);
+  assert.equal(removed.payload.state.meals.length,0);
+  assert.equal(removed.payload.state.messages.length,2);
+  assert.equal(removed.payload.state.messages[0].recordDeleted,true);
+  assert.equal(removed.payload.state.messages[1].recordDeleted,true);
+  assert.equal(removed.payload.state.messages[1].receipt,null);
+  assert.equal((await request('/api/export')).payload.meals.length,0);
+  assert.equal((await request(`/api/meals/${id}`,'DELETE')).status,404);
+  const replay=await request('/api/chat','POST',body);
+  assert.equal(replay.payload.replayed,true);
+  assert.equal(replay.payload.assistantMessage.receipt,null);
+  assert.equal((await request('/api/state')).payload.meals.length,0);
+  assert.equal(calls.length,1);
+}));
+
+test('deleting a day removes its meals, conversation and photo while preserving another date',async()=>withServer(async({request,outputs})=>{
+  await request('/api/profile','PUT',{profile,timezone:'Asia/Shanghai'});
+  const today=(await request('/api/state')).payload.activeDate;
+  const yesterday=new Date(Date.parse(`${today}T12:00:00Z`)-86400000).toISOString().slice(0,10);
+  outputs.push(egg);
+  await request('/api/meals','POST',{date:yesterday,type:'早餐',description:'鸡蛋 2 个'});
+  outputs.push(turn('consumed',egg));
+  const body={requestId:'delete-day-turn-1',text:'',image:'data:image/png;base64,'+Buffer.from('fake-image').toString('base64'),source:'photo'};
+  await request('/api/chat','POST',body);
+  const before=(await request('/api/state')).payload;
+  const mediaUrl=before.messages[0].photoUrl;
+  assert.equal(before.archives[yesterday].calories,150);
+  assert.equal(before.today.calories,150);
+  const removed=await request(`/api/history/${today}`,'DELETE');
+  assert.equal(removed.status,200);
+  assert.equal(removed.payload.deletedMeals,1);
+  assert.equal(removed.payload.deletedMessages,2);
+  assert.equal(removed.payload.state.today.calories,0);
+  assert.equal(removed.payload.state.messages.length,0);
+  assert.equal(removed.payload.state.archives[yesterday].calories,150);
+  assert.equal((await request(mediaUrl)).status,404);
+  assert.equal((await request('/api/turn/delete-day-turn-1')).payload.deleted,true);
+  assert.equal((await request('/api/chat','POST',body)).payload.replayed,true);
+  assert.equal((await request('/api/state')).payload.meals.length,0);
+  assert.equal((await request(`/api/history/${today}`,'DELETE')).status,404);
+  assert.equal((await request('/api/history/2026-02-30','DELETE')).status,400);
+  const old=await request(`/api/history/${yesterday}`,'DELETE');
+  assert.equal(old.status,200);
+  assert.equal(old.payload.state.archives[yesterday],undefined);
+}));
+
+test('deleting a backdated meal keeps today conversation out of future model context',async()=>withServer(async({request,outputs,calls})=>{
+  await request('/api/profile','PUT',{profile,timezone:'Asia/Shanghai'});
+  outputs.push(turn('consumed',egg));
+  await request('/api/chat','POST',{requestId:'backdated-delete-1',text:'昨天吃了两个鸡蛋'});
+  const before=(await request('/api/state')).payload;
+  const yesterday=Object.keys(before.archives)[0];
+  const id=before.archives[yesterday].meals[0].id;
+  const deleted=await request(`/api/meals/${id}`,'DELETE');
+  assert.equal(deleted.status,200);
+  assert.equal(deleted.payload.state.archives[yesterday],undefined);
+  assert.equal(deleted.payload.state.messages.length,2);
+  assert.equal(deleted.payload.state.messages[0].recordDeleted,true);
+  outputs.push(turn('question'));
+  await request('/api/chat','POST',{requestId:'backdated-delete-2',text:'今天晚餐怎么吃？'});
+  const input=JSON.parse(calls.at(-1).input[0].content[0].text);
+  assert.equal(input.recent_messages.length,0);
+  assert.equal(input.last_seven_days.days.find(day=>day.date===yesterday).calories,0);
+}));
+
 test('manual edits to a past day update that day without changing Today',async()=>withServer(async({request,outputs})=>{
   await request('/api/profile','PUT',{profile,timezone:'Asia/Shanghai'});
   const today=(await request('/api/state')).payload.activeDate;

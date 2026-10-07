@@ -83,6 +83,40 @@ test('History groups food by meal and manual edits update Today nutrition', () =
   assert.match(today.app.innerHTML,/750<span class="stat-unit">kcal/);
 });
 
+test('History confirms meal and day deletion before updating preview nutrition', () => {
+  const today=openToday();
+  today.click('nav',{view:'history'});
+  today.click('meal-open',{day:'today',type:'早餐'});
+  today.submitMeal({type:'早餐',description:'鸡蛋 2 个'});
+  const meal=JSON.parse(today.storage.value).meals[0];
+  today.click('meal-delete',{day:'today',meal:meal.id});
+  assert.match(today.app.innerHTML,/删除这顿餐食？/);
+  assert.equal(JSON.parse(today.storage.value).meals.length,1);
+  today.click('close-modal');
+  assert.equal(JSON.parse(today.storage.value).meals.length,1);
+  today.click('meal-delete',{day:'today',meal:meal.id});
+  today.click('delete-confirm');
+  assert.equal(JSON.parse(today.storage.value).meals.length,0);
+  assert.match(today.app.innerHTML,/等待第一顿记录/);
+
+  today.click('nav',{view:'chat'});
+  today.click('example','刚吃了两个鸡蛋');
+  today.click('history-day',{day:'today'});
+  const chatMeal=JSON.parse(today.storage.value).meals[0];
+  today.click('meal-delete',{day:'today',meal:chatMeal.id});
+  today.click('delete-confirm');
+  assert.equal(JSON.parse(today.storage.value).meals.length,0);
+  assert.equal(JSON.parse(today.storage.value).messages.length>0,true);
+  assert.match(today.app.innerHTML,/这顿餐食记录已删除/);
+  today.click('history-delete-day',{day:'today'});
+  assert.match(today.app.innerHTML,/删除当天所有记录？/);
+  assert.equal(JSON.parse(today.storage.value).messages.length>0,true);
+  today.click('delete-confirm');
+  const saved=JSON.parse(today.storage.value);
+  assert.equal(saved.meals.length,0);
+  assert.equal(saved.messages.length,0);
+});
+
 test('Profile shows resting, activity and maintenance energy without double counting training', () => {
   const today=openToday();
   today.click('nav',{view:'profile'});

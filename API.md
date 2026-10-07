@@ -18,6 +18,8 @@
 | `POST /api/chat` | 请求 `{requestId, text, image?, source?, targetMealId?}`。`requestId` 为 8–80 位字母、数字或连字符；`image` 为压缩后的 JPEG/PNG/WebP data URL。 |
 | `POST /api/meals` | 在 History 手动补记。请求 `{date, type, description}`；`type` 为早餐、午餐、晚餐或加餐，`description` 是食物名称和份量。DeepSeek V4 Pro 估算食物项，服务端校验后保存，返回 `{meal, state}`。 |
 | `PUT /api/meals/:id` | 在 History 修改已有餐食。请求 `{type, description}`；沿用原记录日期，重新估算并保存修订，返回 `{meal, state}`。 |
+| `DELETE /api/meals/:id` | 删除单餐及其食物项、修订；原对话保留并标记该餐已删除，返回 `{deleted, state}`。不调用模型。 |
+| `DELETE /api/history/:date` | 删除该日期全部餐食、交流及不再引用的照片，返回 `{deletedMeals, deletedMessages, state}`。不调用模型。 |
 | `GET /api/turn/:requestId` | 断流后按请求 ID 对账。已提交返回结果和最新状态；未完成返回 404。 |
 | `GET /api/export` | 下载服务端完整备份 JSON，包含资料、餐食、交流、照片和修订历史。 |
 | `POST /api/import` | 请求 `{backup, mode}`，`mode` 为 `profile`、`records` 或 `all`；导入旧版浏览器备份或服务端备份，相同记录 ID 不重复导入。 |

@@ -175,7 +175,7 @@ function buildInput(body, state, clarification, imageDescription, historySummary
     target_meal:body.targetMealId?allMeals.find(meal=>meal.id===body.targetMealId)||null:null,
     last_seven_days:historySummary,
     confirmed_habits:state.memories.slice(0,20).map(memory=>memory.text),
-    recent_messages: state.messages.slice(-12).map(m => ({role:m.role,text:m.text||'',after:m.after||''})),
+    recent_messages: state.messages.filter(message=>!message.recordDeleted).slice(-12).map(m => ({role:m.role,text:m.text||'',after:m.after||''})),
     prior_clarification: clarification ? {original_text:clarification.original_text, date:clarification.date, image_description:clarification.image_json?JSON.parse(clarification.image_json).description:null} : null,
     target_meal_id: body.targetMealId || null,
     image_description: imageDescription || null,
@@ -293,6 +293,12 @@ function validMealDate(date,today) {
     && date<=today&&parsed>=Date.parse(`${today}T12:00:00Z`)-365*86400000;
 }
 
+function validHistoryDate(date,today) {
+  if (typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const parsed=Date.parse(`${date}T12:00:00Z`);
+  return Number.isFinite(parsed)&&new Date(parsed).toISOString().slice(0,10)===date&&date<=today;
+}
+
 function json(res, status, data) {
   res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
   res.end(JSON.stringify(data));
@@ -358,6 +364,24 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         const meal=store.saveManualMeal({id:manualRoute[1]||null,date,type:body.type,description,data});
         json(res,manualRoute[1]?200:201,{meal,state:store.state()});
       } catch(error) {json(res,error.status||500,{error:error.message||'保存餐食失败'});}
+      return;
+    }
+    const deleteMealRoute=/^\/api\/meals\/([\w-]{1,80})$/.exec(req.url);
+    if (req.method==='DELETE'&&deleteMealRoute) {
+      try {
+        const deleted=store.deleteMeal(deleteMealRoute[1]);
+        json(res,deleted?200:404,deleted?{deleted,state:store.state()}:{error:'餐食记录不存在。'});
+      } catch(error) {json(res,error.status||500,{error:error.message||'删除餐食失败'});}
+      return;
+    }
+    const deleteDayRoute=/^\/api\/history\/(\d{4}-\d{2}-\d{2})$/.exec(req.url);
+    if (req.method==='DELETE'&&deleteDayRoute) {
+      try {
+        const date=deleteDayRoute[1];
+        if (!validHistoryDate(date,store.today())) return json(res,400,{error:'历史日期无效。'});
+        const deleted=store.deleteDay(date);
+        json(res,deleted?200:404,deleted?{...deleted,state:store.state()}:{error:'当天没有可删除的记录。'});
+      } catch(error) {json(res,error.status||500,{error:error.message||'删除当天记录失败'});}
       return;
     }
     if (req.method === 'POST' && req.url === '/api/import') {

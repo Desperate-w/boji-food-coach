@@ -43,7 +43,7 @@
       attachment:null, draft:'', currentFeedback:null, pending:null, requestError:null,
       connection:{mode:'checking', model:'', provider:''},
       serverToday:null, retryRequestId:null, retrySource:null, importBackup:null, memories:[], memoryDraft:'', memoryEditId:null,
-      profile:null, meals:[], messages:[], mealDraft:null, mealSaving:false, mealError:'',
+      profile:null, meals:[], messages:[], mealDraft:null, mealSaving:false, mealError:'', deleteTarget:null, deleteSaving:false, deleteError:'',
     };
   }
 
@@ -179,7 +179,7 @@
     return `<details class="reasoning-details"><summary>${m.elapsedSeconds!=null?`思考了 ${m.elapsedSeconds} 秒 · `:''}查看${legacySummary?'思考摘要':'思考过程'} ${icon('down')}</summary><div class="reasoning-content">${content}<small>${legacySummary?'这是之前模型提供的思考摘要。':'这里显示 DeepSeek 本轮实际返回的思考文本。'}</small></div></details>`;
   }
   function renderMessage(m, showEdit=true) {
-    if (m.role==='user') return `<article class="message user"><div class="user-bubble">${m.photoUrl?`<img class="user-photo" src="${escapeHtml(m.photoUrl)}" alt="上传的饮食照片">${state.connection.mode==='live'&&/^\/api\/media\/[a-f0-9-]{36}$/.test(m.photoUrl)?`<button class="photo-delete" data-action="delete-photo" data-id="${m.photoUrl.slice('/api/media/'.length)}">删除这张照片</button>`:''}`:''}${escapeHtml(m.text||'上传了一张食物照片')}</div></article>`;
+    if (m.role==='user') return `<article class="message user"><div class="user-bubble">${m.photoUrl?`<img class="user-photo" src="${escapeHtml(m.photoUrl)}" alt="上传的饮食照片">${state.connection.mode==='live'&&/^\/api\/media\/[a-f0-9-]{36}$/.test(m.photoUrl)?`<button class="photo-delete" data-action="delete-photo" data-id="${m.photoUrl.slice('/api/media/'.length)}">删除这张照片</button>`:''}`:''}${escapeHtml(m.text||'上传了一张食物照片')}${m.recordDeleted?'<small class="deleted-record-tag">关联餐食已删除</small>':''}</div></article>`;
     return `<article class="message assistant"><div class="assistant-message"><div class="assistant-avatar">${icon('spark')}</div><div class="assistant-body">${renderRichText(m.text)}${m.receipt?renderReceipt(m.receipt,m.revised,showEdit):''}${m.after?renderRichText(m.after):''}${renderReasoning(m)}<div class="message-meta">${escapeHtml(m.time||'刚刚')}</div></div></div></article>`;
   }
   function renderComposer() {
@@ -238,11 +238,11 @@
   }
   function renderMealBoard(d,day) {
     const types=['早餐','午餐','晚餐','加餐'];
-    return `<section class="meal-board" aria-label="${escapeHtml(d.title)}餐食记录"><div class="meal-board-heading"><div class="eyebrow">MEALS / 餐食记录</div><p>对话中记下的食物会自动放进对应餐次；也可以在这里添加或修改。</p></div><div class="meal-slot-grid">${types.map(type=>{
+    return `<section class="meal-board" aria-label="${escapeHtml(d.title)}餐食记录"><div class="meal-board-heading"><div class="eyebrow">MEALS / 餐食记录</div><p>对话中记下的食物会自动放进对应餐次；也可以在这里添加、修改或删除。</p></div><div class="meal-slot-grid">${types.map(type=>{
       const meals=d.meals.filter(meal=>meal.type===type||(!types.includes(meal.type)&&type==='加餐'));
       return `<section class="meal-slot"><div class="meal-slot-heading"><h3>${type}</h3><button class="text-button" data-action="meal-open" data-day="${escapeHtml(day)}" data-type="${type}" aria-label="添加${type}餐食">${icon('plus')} 添加</button></div>${meals.length?meals.map(meal=>{
         const foods=meal.foodItems?.length?meal.foodItems.map(item=>`${item.food_name}${item.estimated_amount?` ${item.estimated_amount}`:''}`):[meal.name];
-        return `<article class="meal-entry"><div class="meal-entry-top"><strong>${escapeHtml(meal.name)}</strong><button class="text-button" data-action="meal-open" data-day="${escapeHtml(day)}" data-type="${type}" data-meal="${escapeHtml(meal.id)}" aria-label="修改${escapeHtml(meal.name)}">修改</button></div><div class="meal-foods">${foods.map(food=>`<span>${escapeHtml(food)}</span>`).join('')}</div><div class="meal-entry-nutrition">${fmt(meal.calories)} kcal <span>蛋白质 ${fmt(meal.protein)}g</span><span>碳水 ${fmt(meal.carbs||0)}g</span><span>脂肪 ${fmt(meal.fat||0)}g</span></div></article>`;
+        return `<article class="meal-entry"><div class="meal-entry-top"><strong>${escapeHtml(meal.name)}</strong><div class="meal-entry-actions"><button class="text-button" data-action="meal-open" data-day="${escapeHtml(day)}" data-type="${type}" data-meal="${escapeHtml(meal.id)}" aria-label="修改${escapeHtml(meal.name)}">修改</button><button class="text-button destructive-button" data-action="meal-delete" data-day="${escapeHtml(day)}" data-meal="${escapeHtml(meal.id)}" aria-label="删除${escapeHtml(meal.name)}">删除</button></div></div><div class="meal-foods">${foods.map(food=>`<span>${escapeHtml(food)}</span>`).join('')}</div><div class="meal-entry-nutrition">${fmt(meal.calories)} kcal <span>蛋白质 ${fmt(meal.protein)}g</span><span>碳水 ${fmt(meal.carbs||0)}g</span><span>脂肪 ${fmt(meal.fat||0)}g</span></div></article>`;
       }).join(''):'<p class="meal-slot-empty">还没有记录</p>'}</section>`;
     }).join('')}</div></section>`;
   }
@@ -253,15 +253,15 @@
       ? `<section class="history-conversation"><div class="eyebrow">CONVERSATION / 当天交流</div><div class="message-list">${d.messages.map(m=>{
           const latest=m.receipt&&currentMeals.get(m.receipt.id);
           const changed=latest&&(latest.name!==m.receipt.name||latest.type!==m.receipt.type||latest.calories!==m.receipt.calories||latest.protein!==m.receipt.protein);
-          return renderMessage(changed?{...m,receipt:latest,revised:true,after:'这顿后来已修改；请以当前餐次和营养汇总为准。'}:m,state.connection.mode==='live');
+          return renderMessage(m.receipt&&!latest?{...m,receipt:null,after:'这顿餐食记录已删除，不再计入营养汇总。',recordDeleted:true}:changed?{...m,receipt:latest,revised:true,after:'这顿后来已修改；请以当前餐次和营养汇总为准。'}:m,state.connection.mode==='live'&&!m.recordDeleted);
         }).join('')}</div></section>` : '';
-    return `<div class="history-detail"><button class="back-button" data-action="history-back">${icon('arrowLeft')} 返回历史</button><div class="history-overview-grid">${renderHistoryNutrition(d)}${renderMealBoard(d,state.historyDetail)}</div><div class="history-ai">${icon('spark')}　${escapeHtml(d.summary)}</div>${conversation}</div>`;
+    return `<div class="history-detail"><div class="history-detail-actions"><button class="back-button" data-action="history-back">${icon('arrowLeft')} 返回历史</button>${d.meals.length||d.messages.length?`<button class="text-button destructive-button" data-action="history-delete-day" data-day="${escapeHtml(state.historyDetail)}">删除当天记录</button>`:''}</div><div class="history-overview-grid">${renderHistoryNutrition(d)}${renderMealBoard(d,state.historyDetail)}</div><div class="history-ai">${icon('spark')}　${escapeHtml(d.summary)}</div>${conversation}</div>`;
   }
   function renderHistory() {
     if (state.historyDetail && state.historyDetail!=='today' && !state.archives?.[state.historyDetail]) state.historyDetail=null;
     const entries=Object.keys(state.archives||{}).sort().reverse();
     const today=historyFor('today');
-    return `<div class="page wide-page">${renderTopbar()}<main class="section-page"><div class="section-inner wide-inner"><div class="page-heading"><div class="eyebrow">YOUR DAYS / 饮食历史</div><h1>每天都更了解自己一点。</h1><p>按餐次整理吃过的食物，随时补记或修改。</p></div>${state.historyDetail?renderHistoryDetail():`<div class="history-overview-grid">${renderHistoryNutrition(today)}${renderMealBoard(today,'today')}</div><section class="history-archive"><div class="eyebrow">PAST DAYS / 过去的日子</div>${entries.length?`<div class="history-list">${entries.map(day=>{const d=historyFor(day);return `<button class="history-card" data-action="history-day" data-day="${day}"><span class="history-date"><strong>${d.day}</strong><span>${d.month}</span></span><span class="history-info"><strong>${d.title} <span class="status-badge"><span class="status-dot"></span>${escapeHtml(d.status)}</span></strong><small>${fmt(d.calories)} kcal　·　蛋白质 ${fmt(d.protein)}g　·　${d.meals.length} 餐${d.messages.length?`　·　${d.messages.length} 条交流`:''}</small></span>${icon('chevron')}</button>`}).join('')}</div>`:'<p class="history-archive-empty">过去的记录会显示在这里。</p>'}</section>${today.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的完整交流 ${icon('chevron')}</button>`:''}`}</div></main></div>`;
+    return `<div class="page wide-page">${renderTopbar()}<main class="section-page"><div class="section-inner wide-inner"><div class="page-heading"><div class="eyebrow">YOUR DAYS / 饮食历史</div><h1>每天都更了解自己一点。</h1><p>按餐次整理吃过的食物，随时补记、修改或删除。</p></div>${state.historyDetail?renderHistoryDetail():`<div class="history-overview-grid">${renderHistoryNutrition(today)}${renderMealBoard(today,'today')}</div><section class="history-archive"><div class="eyebrow">PAST DAYS / 过去的日子</div>${entries.length?`<div class="history-list">${entries.map(day=>{const d=historyFor(day);return `<button class="history-card" data-action="history-day" data-day="${day}"><span class="history-date"><strong>${d.day}</strong><span>${d.month}</span></span><span class="history-info"><strong>${d.title} <span class="status-badge"><span class="status-dot"></span>${escapeHtml(d.status)}</span></strong><small>${fmt(d.calories)} kcal　·　蛋白质 ${fmt(d.protein)}g　·　${d.meals.length} 餐${d.messages.length?`　·　${d.messages.length} 条交流`:''}</small></span>${icon('chevron')}</button>`}).join('')}</div>`:'<p class="history-archive-empty">过去的记录会显示在这里。</p>'}</section>${today.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的完整交流 ${icon('chevron')}</button>`:''}`}</div></main></div>`;
   }
   function renderProfileMemories() {
     if (state.connection.mode!=='live') return '';
@@ -305,6 +305,10 @@
     if (state.modal==='meal') {
       const d=state.mealDraft;
       return `<div class="modal-backdrop"><div class="modal meal-editor" role="dialog" aria-modal="true" aria-label="${d.id?'修改':'添加'}餐食"><div class="modal-top"><div><div class="eyebrow">MEAL / ${d.date==='today'?'今天':escapeHtml(d.date)}</div><h2>${d.id?'修改这顿吃了什么':'添加一顿餐食'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭" ${state.mealSaving?'disabled':''}>${icon('close')}</button></div><p>写下食物名称和大致份量，每行一种食物。保存后会重新估算这顿并更新当日进度。</p><form id="meal-form"><label class="field">餐次<select id="meal-type" ${state.mealSaving?'disabled':''}>${['早餐','午餐','晚餐','加餐'].map(type=>`<option value="${type}" ${d.type===type?'selected':''}>${type}</option>`).join('')}</select></label><label class="field">吃了什么<textarea id="meal-description" rows="5" maxlength="1000" placeholder="例如：鸡蛋 2 个&#10;吐司 2 片" ${state.mealSaving?'disabled':''}>${escapeHtml(d.description)}</textarea></label>${state.mealError?`<p class="meal-editor-error" role="alert">${escapeHtml(state.mealError)}</p>`:''}<div class="meal-editor-actions"><button type="button" class="secondary-button" data-action="close-modal" ${state.mealSaving?'disabled':''}>取消</button><button type="submit" class="primary-button" ${state.mealSaving?'disabled':''}>${state.mealSaving?'正在估算并保存…':'保存并更新进度'}</button></div></form><p class="meal-editor-note">${state.connection.mode==='live'?'食物描述会发送给 DeepSeek 估算，结果保存到本机。':'当前为前端预览，营养值是本地模拟估算。'}</p></div></div>`;
+    }
+    if (state.modal==='delete') {
+      const target=state.deleteTarget, entireDay=target.kind==='day';
+      return `<div class="modal-backdrop"><div class="modal delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-description"><div class="modal-top"><div><div class="eyebrow">DELETE / 删除记录</div><h2 id="delete-dialog-title">${entireDay?'删除当天所有记录？':'删除这顿餐食？'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="取消删除" ${state.deleteSaving?'disabled':''}>${icon('close')}</button></div><p id="delete-dialog-description">${entireDay?`${escapeHtml(target.label)}的 ${target.mealCount} 顿餐食和 ${target.messageCount} 条交流将被删除；仅关联这些交流的照片也会移除。`:`${escapeHtml(target.label)} · ${escapeHtml(target.name)} 将从营养统计中移除。相关对话会保留，并标记这顿已删除。`}此操作无法撤销。</p>${state.deleteError?`<p class="delete-error" role="alert">${escapeHtml(state.deleteError)}</p>`:''}<div class="delete-dialog-actions"><button id="delete-cancel" class="secondary-button" data-action="close-modal" ${state.deleteSaving?'disabled':''}>取消</button><button class="delete-confirm-button" data-action="delete-confirm" ${state.deleteSaving?'disabled':''}>${state.deleteSaving?'正在删除…':entireDay?'删除当天记录':'删除这顿'}</button></div></div></div>`;
     }
     if (state.modal==='memory') return `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="编辑长期习惯"><div class="modal-top"><div><div class="eyebrow">HABIT / 长期习惯</div><h2>${state.memoryEditId?'修改习惯':'添加习惯'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><label class="field voice-field">饮食习惯<textarea id="memory-text" maxlength="200" rows="3" placeholder="例如：平时喝无糖拿铁">${escapeHtml(state.memoryDraft)}</textarea></label><div class="voice-actions"><button class="primary-button" data-action="memory-save">保存习惯</button></div></div></div>`;
     if (state.modal==='import') return `<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-label="导入旧记录"><div class="modal-top"><div><div class="eyebrow">IMPORT / 导入记录</div><h2>选择要迁入的内容</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div><p>旧版餐食是演示估算，导入后会标注来源，不会覆盖现有记录。文件：${escapeHtml(state.importBackup?.fileName||'')}</p><div class="voice-actions"><button class="secondary-button" data-action="import-select" data-mode="profile">仅身体资料</button><button class="secondary-button" data-action="import-select" data-mode="records">仅饮食与交流</button><button class="primary-button" data-action="import-select" data-mode="all">全部导入</button></div></div></div>`;
@@ -411,6 +415,52 @@
     } catch(error) {state.mealSaving=false;state.mealError=error.message||'保存失败，请重试。';render();}
     finally {state.mealSaving=false;}
   }
+  function deleteDemoRecord(target) {
+    if (target.kind==='day') {
+      if (target.day==='today') {state.meals=[];state.messages=[];}
+      else delete state.archives[target.day];
+      state.historyDetail=null;
+      return;
+    }
+    const list=target.day==='today'?state.meals:state.archives?.[target.day]?.meals;
+    const index=list?.findIndex(meal=>meal.id===target.id)??-1;
+    if (index<0) throw new Error('找不到这顿餐食，请刷新页面重试。');
+    list.splice(index,1);
+    for (const messages of [state.messages,...Object.values(state.archives||{}).map(archive=>archive.messages||[])]) {
+      for (let index=0;index<messages.length;index++) {
+        const message=messages[index];
+        if (message.receipt?.id!==target.id) continue;
+        message.receipt=null;message.revised=false;message.recordDeleted=true;
+        message.after='这顿餐食记录已删除，不再计入营养汇总。';
+        if (messages[index-1]?.role==='user') messages[index-1].recordDeleted=true;
+      }
+    }
+    if (target.day!=='today') {
+      const archive=state.archives[target.day];
+      if (!list.length&&!archive.messages?.length) {delete state.archives[target.day];state.historyDetail=null;}
+      else Object.assign(archive,mealTotals(list),{status:list.length?'已更新':'待记录',summary:list.length?'这一天的餐食和营养汇总已更新。':'这一天没有餐食记录。'});
+    }
+  }
+  async function deleteRecord() {
+    const target=state.deleteTarget;
+    if (!target||state.deleteSaving) return;
+    if (['checking','unavailable'].includes(state.connection.mode)&&/^https?:$/.test(window.location?.protocol||'')) {
+      state.deleteError='本地服务尚未就绪，请稍后刷新重试。';render();return;
+    }
+    state.deleteSaving=true;state.deleteError='';render();
+    try {
+      if (state.connection.mode==='live') {
+        const endpoint=target.kind==='meal'?`/api/meals/${encodeURIComponent(target.id)}`:`/api/history/${encodeURIComponent(target.date)}`;
+        const response=await fetch(endpoint,{method:'DELETE'});
+        const payload=await response.json();
+        if (!response.ok) throw new Error(payload.error||'删除失败，请重试。');
+        applyServerState(payload.state);
+        if (target.kind==='day'||(target.day!=='today'&&!state.archives[target.day])) state.historyDetail=null;
+      } else deleteDemoRecord(target);
+      state.currentFeedback=null;state.correctionTarget=null;state.modal=null;state.deleteTarget=null;state.deleteSaving=false;
+      render();toast(target.kind==='meal'?'这顿已删除，营养进度已更新':'当天记录已删除');
+    } catch(error) {state.deleteSaving=false;state.deleteError=error.message||'删除失败，请重试。';render();}
+  }
   function classify(text, withPhoto) {
     if (state.correctionTarget || (/(其实|刚才|不是|没那么多|更正|改成)/.test(text) && state.meals.length)) return 'correction';
     if (/(随便吃了点|吃了点东西|吃了一些东西)/.test(text)) return 'vague';
@@ -481,7 +531,7 @@
     clearInterval(thinkingTimer);
     clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
     applyServerState(payload.state);
-    state.currentFeedback=payload.assistantMessage;
+    state.currentFeedback=payload.assistantMessage?.recordDeleted?null:payload.assistantMessage;
     state.pending=null;state.requestError=null;state.retryRequestId=null;state.retrySource=null;state.correctionTarget=null;
     render();scrollBottom();
   }
@@ -616,6 +666,22 @@
       state.mealDraft={id,date:day,type:meal?.type||type,description:meal?.importedDemo?(meal.input||meal.name):meal?.foodItems?.length?meal.foodItems.map(item=>`${item.food_name}${item.estimated_amount?` ${item.estimated_amount}`:''}`).join('\n'):meal?.input||''};
       state.mealError='';state.mealSaving=false;state.modal='meal';render();requestAnimationFrame(()=>document.getElementById('meal-description')?.focus());
     }
+    else if (action==='meal-delete') {
+      if (state.pending) return toast('请等待当前回复结束，或先停止生成。');
+      const day=button.dataset.day||'today';
+      const list=day==='today'?state.meals:state.archives?.[day]?.meals||[];
+      const meal=list.find(entry=>entry.id===button.dataset.meal);
+      if (!meal) return toast('找不到这顿餐食，请刷新页面重试。');
+      state.deleteTarget={kind:'meal',day,id:meal.id,name:meal.name,label:day==='today'?'今天':day};
+      state.deleteError='';state.modal='delete';render();requestAnimationFrame(()=>document.getElementById('delete-cancel')?.focus());
+    }
+    else if (action==='history-delete-day') {
+      if (state.pending) return toast('请等待当前回复结束，或先停止生成。');
+      const day=button.dataset.day||'today', record=historyFor(day);
+      state.deleteTarget={kind:'day',day,date:day==='today'?state.activeDate:day,label:day==='today'?'今天':record.title,mealCount:record.meals.length,messageCount:record.messages.length};
+      state.deleteError='';state.modal='delete';render();requestAnimationFrame(()=>document.getElementById('delete-cancel')?.focus());
+    }
+    else if (action==='delete-confirm') await deleteRecord();
     else if (action==='expand-today') {state.expanded=!state.expanded;render();}
     else if (action==='dismiss-feedback') {state.currentFeedback=null;render();}
     else if (action==='toggle-pending-reasoning' && state.pending) {state.pending.reasoningOpen=!state.pending.reasoningOpen;render();}
@@ -663,7 +729,7 @@
         applyServerState(payload.state);state.importBackup=null;state.modal=null;render();toast(`已导入 ${payload.importedMeals} 餐、${payload.importedMessages} 条交流`);
       } catch(error) {toast(error.message||'导入失败');}
     }
-    else if (action==='close-modal'&&!state.mealSaving) {if (state.modal==='voice') cancelVoiceRecognition();state.modal=null;state.mealDraft=null;render();}
+    else if (action==='close-modal'&&!state.mealSaving&&!state.deleteSaving) {if (state.modal==='voice') cancelVoiceRecognition();state.modal=null;state.mealDraft=null;state.deleteTarget=null;state.deleteError='';render();}
     else if (action==='onboard-back') {state.onboardStep=Math.max(0,state.onboardStep-1);render();}
     else if (action==='onboard-next') handleOnboardNext();
     else if (action==='select-goal') {state.onboardingDraft.goal=button.dataset.value;render();}

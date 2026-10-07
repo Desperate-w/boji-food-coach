@@ -149,6 +149,75 @@ class Store {
     } catch(error) {this.db.exec('ROLLBACK');throw error;}
     return meal;
   }
+  markMealDeleted(id) {
+    for (const row of this.db.prepare('SELECT id,payload_json FROM conversation_message WHERE related_meal_id=?').all(id)) {
+      const message=parse(row.payload_json);
+      message.recordDeleted=true;
+      if (message.receipt?.id===id) {
+        message.receipt=null;
+        message.revised=false;
+        message.after='这顿餐食记录已删除，不再计入营养汇总。';
+      }
+      this.db.prepare('UPDATE conversation_message SET related_meal_id=NULL,payload_json=? WHERE id=?').run(JSON.stringify(message),row.id);
+    }
+  }
+  scrubDeletedTurns(mealIds, messageIds=new Set()) {
+    for (const row of this.db.prepare('SELECT request_id,result_json FROM turn_request').all()) {
+      const result=parse(row.result_json);
+      if (messageIds.has(result?.assistantMessage?.id)) {
+        this.db.prepare('UPDATE turn_request SET result_json=? WHERE request_id=?').run(JSON.stringify({deleted:true,assistantMessage:null,receipt:null}),row.request_id);
+      } else if (mealIds.has(result?.receipt?.id)||mealIds.has(result?.assistantMessage?.receipt?.id)) {
+        result.receipt=null;
+        if (result.result) result.result.meal=null;
+        if (result.assistantMessage) {
+          result.assistantMessage.receipt=null;
+          result.assistantMessage.revised=false;
+          result.assistantMessage.recordDeleted=true;
+          result.assistantMessage.after='这顿餐食记录已删除，不再计入营养汇总。';
+        }
+        this.db.prepare('UPDATE turn_request SET result_json=? WHERE request_id=?').run(JSON.stringify(result),row.request_id);
+      }
+    }
+  }
+  deleteMeal(id) {
+    const target=this.manualTarget(id);
+    if (!target) return null;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.markMealDeleted(id);
+      this.scrubDeletedTurns(new Set([id]));
+      this.db.prepare('DELETE FROM meal WHERE id=?').run(id);
+      this.db.exec('COMMIT');
+    } catch(error) {this.db.exec('ROLLBACK');throw error;}
+    return {id,date:target.date};
+  }
+  deleteDay(date) {
+    const mealIds=this.db.prepare('SELECT id FROM meal WHERE date=?').all(date).map(row=>row.id);
+    const messages=this.db.prepare('SELECT id,payload_json FROM conversation_message WHERE date=?').all(date);
+    if (!mealIds.length&&!messages.length) return null;
+    const mediaIds=new Set(messages.map(row=>/^\/api\/media\/([a-f0-9-]{36})$/.exec(parse(row.payload_json)?.photoUrl||'')?.[1]).filter(Boolean));
+    const removedFiles=[];
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const id of mealIds) this.markMealDeleted(id);
+      this.scrubDeletedTurns(new Set(mealIds),new Set(messages.map(row=>row.id)));
+      this.db.prepare('DELETE FROM meal WHERE date=?').run(date);
+      this.db.prepare('DELETE FROM conversation_message WHERE date=?').run(date);
+      this.db.prepare('DELETE FROM clarification WHERE date=?').run(date);
+      for (const id of mediaIds) {
+        const url=`/api/media/${id}`;
+        if (this.db.prepare('SELECT 1 FROM conversation_message WHERE payload_json LIKE ? LIMIT 1').get(`%${url}%`)) continue;
+        const media=this.db.prepare('SELECT filename FROM media WHERE id=?').get(id);
+        if (media) {
+          this.db.prepare('DELETE FROM media WHERE id=?').run(id);
+          removedFiles.push(media.filename);
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch(error) {this.db.exec('ROLLBACK');throw error;}
+    for (const filename of removedFiles) fs.rmSync(path.join(this.mediaDir,filename),{force:true});
+    return {date,deletedMeals:mealIds.length,deletedMessages:messages.length};
+  }
   messages(date) {
     const rows = date ? this.db.prepare('SELECT payload_json FROM conversation_message WHERE date=? ORDER BY created_at,rowid').all(date)
       : this.db.prepare('SELECT date,payload_json FROM conversation_message ORDER BY created_at,rowid').all();
