@@ -53,7 +53,7 @@ class Store {
     this.mediaDir=path.join(path.dirname(filename),'media');
     fs.mkdirSync(this.mediaDir,{recursive:true,mode:0o700});
     this.db = new DatabaseSync(filename);
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS user_profile (id INTEGER PRIMARY KEY CHECK(id=1), input_json TEXT NOT NULL, timezone TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -94,20 +94,20 @@ class Store {
   }
   timeZone() { return this.db.prepare('SELECT timezone FROM user_profile WHERE id=1').get()?.timezone || 'Asia/Shanghai'; }
   today() { return localDate(this.timeZone()); }
-  saveProfile(input, timeZone) {
+  saveProfile(input, timeZone, {transaction=true}={}) {
     const error = nutrition.validate(input);
     if (error) { const e = new Error(error); e.status = 400; throw e; }
     const calculation = nutrition.calculate(input);
     const tz = safeTimeZone(timeZone);
     const profileInput = Object.fromEntries(['gender','age','height','weight','goal','frequency','training','activity'].map(key => [key, key==='age'||key==='height'||key==='weight' ? Number(input[key]) : input[key]]));
     const savedAt = now();
-    this.db.exec('BEGIN IMMEDIATE');
+    if (transaction) this.db.exec('BEGIN IMMEDIATE');
     try {
       const version = (this.db.prepare('SELECT MAX(version) AS version FROM nutrition_plan').get().version || 0) + 1;
       this.db.prepare('INSERT INTO user_profile(id,input_json,timezone,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET input_json=excluded.input_json,timezone=excluded.timezone,updated_at=excluded.updated_at').run(JSON.stringify(profileInput),tz,savedAt);
       this.db.prepare('INSERT INTO nutrition_plan(version,profile_json,effective_at,local_date) VALUES(?,?,?,?)').run(version,JSON.stringify(calculation),savedAt,localDate(tz,new Date(savedAt)));
-      this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+      if (transaction) this.db.exec('COMMIT');
+    } catch (error) { if (transaction) this.db.exec('ROLLBACK'); throw error; }
     return this.profile();
   }
   planFor(date) {
@@ -227,6 +227,9 @@ class Store {
   saveMemory(text) {
     if (typeof text!=='string'||text.trim().length<2||text.trim().length>200) {const e=new Error('习惯内容请填写 2–200 字。');e.status=400;throw e;}
     const clean=text.trim(), timestamp=now();
+    if (!this.db.prepare('SELECT 1 FROM user_memory WHERE text=?').get(clean) && this.db.prepare('SELECT COUNT(*) AS count FROM user_memory').get().count>=50) {
+      const error=new Error('最多保存 50 条长期习惯，请先删除不再需要的内容。');error.status=409;throw error;
+    }
     this.db.prepare('INSERT INTO user_memory(id,text,created_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(text) DO UPDATE SET updated_at=excluded.updated_at').run(uid(),clean,timestamp,timestamp);
     return this.db.prepare('SELECT id,text,created_at AS createdAt,updated_at AS updatedAt FROM user_memory WHERE text=?').get(clean);
   }
@@ -245,21 +248,30 @@ class Store {
     }
     return {days,averageProtein:Math.round(days.reduce((sum,day)=>sum+day.protein,0)/7),highestCalories:days.reduce((best,day)=>day.calories>best.calories?{date:day.date,calories:day.calories}:best,{date:null,calories:0})};
   }
-  state() {
-    const date = this.today();
-    const allMeals = this.meals();
-    const allMessages = this.messages();
-    const dates = new Set([...allMeals, ...allMessages].map(row => row.date).filter(day => day !== date));
-    const archives = {};
-    for (const day of dates) {
-      const meals = allMeals.filter(row => row.date === day).map(({date:unused, ...rest}) => rest);
-      const messages = allMessages.filter(row => row.date === day).map(({date:unused, ...rest}) => rest);
-      const sum = totals(meals), plan = this.planFor(day);
-      archives[day] = {date:day, meals, messages, ...sum, plan, status:dailyStatus(meals,plan), summary:dailyAdvice(meals,plan)};
+  day(date, {includeMessages=true}={}) {
+    const meals=this.meals(date), messages=includeMessages?this.messages(date).map(message=>message.receipt
+      ?{...message,latestReceipt:this.manualTarget(message.receipt.id)?.meal||null}:message):[], plan=this.planFor(date);
+    const messageCount=includeMessages?messages.length:this.db.prepare('SELECT COUNT(*) AS count FROM conversation_message WHERE date=?').get(date).count;
+    return {date,meals,messages,messageCount,...totals(meals),plan,status:dailyStatus(meals,plan),summary:dailyAdvice(meals,plan)};
+  }
+  historyPage(before=this.today()) {
+    const dates=this.db.prepare(`SELECT date FROM (
+      SELECT DISTINCT date FROM meal WHERE date<? UNION SELECT DISTINCT date FROM conversation_message WHERE date<?
+    ) ORDER BY date DESC LIMIT 31`).all(before,before).map(row=>row.date);
+    const page=dates.slice(0,30);
+    return {archives:Object.fromEntries(page.map(date=>[date,this.day(date,{includeMessages:false})])),
+      historyPage:{hasMore:dates.length>30,nextBefore:page.at(-1)||null}};
+  }
+  state({focusDate}={}) {
+    const date=this.today(), current=this.day(date);
+    const {archives,historyPage}=this.historyPage(date);
+    // Preserve the date being edited even when it is outside the first page.
+    if (typeof focusDate==='string' && datePattern.test(focusDate) && focusDate<date) {
+      const day=this.day(focusDate);
+      if (day.meals.length||day.messages.length) archives[focusDate]=day;
     }
-    const meals = allMeals.filter(row => row.date === date).map(({date:unused,...rest}) => rest);
-    const messages = allMessages.filter(row => row.date === date).map(({date:unused,...rest}) => rest);
-    return {profile:this.profile(), activeDate:date, meals, messages, archives, memories:this.memories(), today:{...totals(meals),status:dailyStatus(meals,this.planFor(date)),advice:dailyAdvice(meals,this.planFor(date))}};
+    return {profile:this.profile(),activeDate:date,meals:current.meals,messages:current.messages,archives,historyPage,memories:this.memories(),
+      today:{...totals(current.meals),status:current.status,advice:current.summary}};
   }
   clarification() { return this.db.prepare('SELECT original_text,date,image_json FROM clarification WHERE id=1').get() || null; }
   logModelCall({requestId,model,purpose,status,inputTokens,outputTokens}) {
@@ -402,12 +414,12 @@ class Store {
     const meals=mode==='profile'?[]:rawMeals.filter(row=>row&&!sampleIds.has(row.id)).map(normalizeMeal);
     const messages=mode==='profile'?[]:rawMessages.filter(row=>row&&!sampleTexts.has(row.text)).map(normalizeMessage);
     const memories=mode==='records'?[]:rawMemories.map(row=>row?.text).filter(text=>typeof text==='string'&&text.trim().length>=2&&text.trim().length<=200);
-    if (mode!=='records'&&backup.profile) this.saveProfile(backup.profile,backup.profile.timezone||backup.timezone);
-    if (mode!=='profile'&&!this.profile()) {const e=new Error('请先建档，或选择同时导入档案。');e.status=409;throw e;}
+    if (mode!=='profile'&&!this.profile() && !(mode!=='records'&&backup.profile)) {const e=new Error('请先建档，或选择同时导入档案。');e.status=409;throw e;}
     let mealCount=0,messageCount=0;
     const importedMedia=[];
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      if (mode!=='records'&&backup.profile) this.saveProfile(backup.profile,backup.profile.timezone||backup.timezone,{transaction:false});
       for (const memory of memories) this.saveMemory(memory);
       for (const {date,meal} of meals) {
         const timestamp=new Date(`${date}T12:00:00.000Z`).toISOString();

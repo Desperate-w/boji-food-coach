@@ -30,9 +30,14 @@
   const withoutSamples = records => records.filter(record => !sampleIds.has(record.id) && !sampleIds.has(record.receipt?.id) && !sampleTexts.has(record.text));
   const nutrition = window.BojiNutrition;
   let csrfToken='';
+  let historyLoadId=0;
+  window.addEventListener('pageshow',event=>{
+    if (event.persisted && /^https?:$/.test(window.location?.protocol||'')) window.location.reload();
+  });
   function apiFetch(url,options={}) {
     const method=(options.method||'GET').toUpperCase();
     const headers={...(options.headers||{})};
+    if (state?.historyDetail && state.historyDetail!=='today') headers['X-History-Date']=state.historyDetail;
     if (!['GET','HEAD'].includes(method) && csrfToken) headers['X-CSRF-Token']=csrfToken;
     return fetch(url,{...options,headers}).then(response=>{
       if (response.status===401 && /^https?:$/.test(window.location?.protocol||'')) window.location.replace('/login');
@@ -49,7 +54,7 @@
     return {
       view:'chat', historyDetail:null, expanded:false, menuOpen:false, modal:null, onboardStep:0, onboardingDraft:emptyDraft(), onboardingComplete:false, correctionTarget:null,
       voiceStatus:'idle', voiceTranscript:'', voiceError:'',
-      activeDate:dateKey(), archives:{},
+      activeDate:dateKey(), archives:{}, historyPage:null, historyLoading:false,
       attachment:null, draft:'', currentFeedback:null, pending:null, requestError:null,
       connection:{mode:'checking', model:'', provider:''},
       serverToday:null, retryRequestId:null, retrySource:null, importBackup:null, memories:[], memoryDraft:'', memoryEditId:null,
@@ -224,7 +229,7 @@
     const archived=state.archives?.[dateKey(date)];
     const title=`${date.getMonth()+1}月${date.getDate()}日`;
     const sum=mealTotals(archived.meals||[]);
-    return {title,day:String(date.getDate()),month:`${date.getMonth()+1}月`,date:day,...sum,plan:archived.plan||null,status:archived.status,summary:archived.summary,meals:archived.meals||[],messages:archived.messages||[]};
+    return {title,day:String(date.getDate()),month:`${date.getMonth()+1}月`,date:day,...sum,plan:archived.plan||null,status:archived.status,summary:archived.summary,meals:archived.meals||[],messages:archived.messages||[],messageCount:archived.messageCount??archived.messages?.length??0};
   }
   function mealTotals(meals) {
     return meals.reduce((sum,meal)=>({calories:sum.calories+(meal.calories||0),protein:sum.protein+(meal.protein||0),carbs:sum.carbs+(meal.carbs||0),fat:sum.fat+(meal.fat||0),fiber:sum.fiber+(meal.fiber||0)}),{calories:0,protein:0,carbs:0,fat:0,fiber:0});
@@ -261,7 +266,7 @@
     const currentMeals=new Map([...state.meals,...Object.values(state.archives||{}).flatMap(archive=>archive.meals||[])].map(meal=>[meal.id,meal]));
     const conversation=d.messages.length
       ? `<section class="history-conversation"><div class="eyebrow">CONVERSATION / 当天交流</div><div class="message-list">${d.messages.map(m=>{
-          const latest=m.receipt&&currentMeals.get(m.receipt.id);
+          const latest=state.connection.mode==='live'?m.latestReceipt:(m.receipt&&currentMeals.get(m.receipt.id));
           const changed=latest&&(latest.name!==m.receipt.name||latest.type!==m.receipt.type||latest.calories!==m.receipt.calories||latest.protein!==m.receipt.protein);
           return renderMessage(m.receipt&&!latest?{...m,receipt:null,after:'这顿餐食记录已删除，不再计入营养汇总。',recordDeleted:true}:changed?{...m,receipt:latest,revised:true,after:'这顿后来已修改；请以当前餐次和营养汇总为准。'}:m,state.connection.mode==='live'&&!m.recordDeleted);
         }).join('')}</div></section>` : '';
@@ -271,7 +276,7 @@
     if (state.historyDetail && state.historyDetail!=='today' && !state.archives?.[state.historyDetail]) state.historyDetail=null;
     const entries=Object.keys(state.archives||{}).sort().reverse();
     const today=historyFor('today');
-    return `<div class="page wide-page">${renderTopbar()}<main class="section-page"><div class="section-inner wide-inner"><div class="page-heading"><div class="eyebrow">YOUR DAYS / 饮食历史</div><h1>每天都更了解自己一点。</h1><p>按餐次整理吃过的食物，随时补记、修改或删除。</p></div>${state.historyDetail?renderHistoryDetail():`<div class="history-overview-grid">${renderHistoryNutrition(today)}${renderMealBoard(today,'today')}</div><section class="history-archive"><div class="eyebrow">PAST DAYS / 过去的日子</div>${entries.length?`<div class="history-list">${entries.map(day=>{const d=historyFor(day);return `<button class="history-card" data-action="history-day" data-day="${day}"><span class="history-date"><strong>${d.day}</strong><span>${d.month}</span></span><span class="history-info"><strong>${d.title} <span class="status-badge"><span class="status-dot"></span>${escapeHtml(d.status)}</span></strong><small>${fmt(d.calories)} kcal　·　蛋白质 ${fmt(d.protein)}g　·　${d.meals.length} 餐${d.messages.length?`　·　${d.messages.length} 条交流`:''}</small></span>${icon('chevron')}</button>`}).join('')}</div>`:'<p class="history-archive-empty">过去的记录会显示在这里。</p>'}</section>${today.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的完整交流 ${icon('chevron')}</button>`:''}`}</div></main></div>`;
+    return `<div class="page wide-page">${renderTopbar()}<main class="section-page"><div class="section-inner wide-inner"><div class="page-heading"><div class="eyebrow">YOUR DAYS / 饮食历史</div><h1>每天都更了解自己一点。</h1><p>按餐次整理吃过的食物，随时补记、修改或删除。</p></div>${state.historyDetail?renderHistoryDetail():`<div class="history-overview-grid">${renderHistoryNutrition(today)}${renderMealBoard(today,'today')}</div><section class="history-archive"><div class="eyebrow">PAST DAYS / 过去的日子</div>${entries.length?`<div class="history-list">${entries.map(day=>{const d=historyFor(day);return `<button class="history-card" data-action="history-day" data-day="${day}"><span class="history-date"><strong>${d.day}</strong><span>${d.month}</span></span><span class="history-info"><strong>${d.title} <span class="status-badge"><span class="status-dot"></span>${escapeHtml(d.status)}</span></strong><small>${fmt(d.calories)} kcal　·　蛋白质 ${fmt(d.protein)}g　·　${d.meals.length} 餐${d.messageCount?`　·　${d.messageCount} 条交流`:''}</small></span>${icon('chevron')}</button>`}).join('')}</div>`:'<p class="history-archive-empty">过去的记录会显示在这里。</p>'}${state.connection.mode==='live'&&state.historyPage?.hasMore?`<button class="secondary-button" data-action="history-more" ${state.historyLoading?'disabled':''}>${state.historyLoading?'正在读取…':'加载更早的记录'}</button>`:''}</section>${today.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的完整交流 ${icon('chevron')}</button>`:''}`}</div></main></div>`;
   }
   function renderProfileMemories() {
     if (state.connection.mode!=='live') return '';
@@ -289,7 +294,7 @@
   }
   function renderProfile() {
     const p=state.profile;
-    return `<div class="page profile-page">${renderTopbar()}<main class="section-page"><div class="section-inner profile-inner"><div class="page-heading"><div class="eyebrow">YOUR PLAN / 我的计划</div><h1>你的饮食起点。</h1><p>这些数字由你填写的资料估算；身体和训练习惯变化时，可以随时更新。</p></div><div class="profile-top-grid"><div class="profile-hero"><div class="eyebrow">CURRENT STRATEGY / 当前策略</div><h2>${escapeHtml(p.strategy)}</h2><p>${escapeHtml(p.explanation)} 你负责记录吃了什么，薄肌帮你整理今天的进度。</p></div>${renderEnergySummary(p)}</div><div class="profile-grid"><div class="profile-card"><h3>每日建议</h3><dl><div><dt>热量范围</dt><dd>${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal</dd></div><div><dt>蛋白质目标</dt><dd>约 ${fmt(p.proteinTarget)}g</dd></div><div><dt>碳水 / 脂肪</dt><dd>约 ${fmt(p.carbsTarget)}g / ${fmt(p.fatTarget)}g</dd></div><div><dt>当前目标</dt><dd>${escapeHtml(p.goal)}</dd></div></dl></div><div class="profile-card"><h3>身体与训练</h3><dl><div><dt>基础信息</dt><dd>${escapeHtml(p.gender)} · ${p.age} 岁</dd></div><div><dt>身高 / 体重</dt><dd>${p.height} cm / ${p.weight} kg</dd></div><div><dt>训练频率</dt><dd>${escapeHtml(p.frequency)}</dd></div><div><dt>训练类型</dt><dd>${escapeHtml(p.training)}</dd></div><div><dt>日常活动</dt><dd>${escapeHtml(p.activityLabel)}</dd></div></dl></div></div><div class="estimate-note"><strong>这些建议怎样得来</strong><p>静息消耗使用成人 Mifflin–St Jeor 公式估算，再按所选活动等级得到全天维持消耗，并根据目标调整每日建议摄入。训练频率不重复乘入活动系数。结果不是实测值，也不适用于未成年人、孕哺期或需要特殊饮食管理的人。</p></div><button class="profile-action" data-action="onboarding">更新身体信息与目标</button><div class="profile-data-actions"><button class="secondary-button" data-action="export-backup">导出记录备份</button>${state.connection.mode==='live'?'<button class="secondary-button" data-action="import-backup">导入旧版记录</button>':''}</div>${renderProfileMemories()}</div></main></div>`;
+    return `<div class="page profile-page">${renderTopbar()}<main class="section-page"><div class="section-inner profile-inner"><div class="page-heading"><div class="eyebrow">YOUR PLAN / 我的计划</div><h1>你的饮食起点。</h1><p>这些数字由你填写的资料估算；身体和训练习惯变化时，可以随时更新。</p></div><div class="profile-top-grid"><div class="profile-hero"><div class="eyebrow">CURRENT STRATEGY / 当前策略</div><h2>${escapeHtml(p.strategy)}</h2><p>${escapeHtml(p.explanation)} 你负责记录吃了什么，薄肌帮你整理今天的进度。</p></div>${renderEnergySummary(p)}</div><div class="profile-grid"><div class="profile-card"><h3>每日建议</h3><dl><div><dt>热量范围</dt><dd>${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal</dd></div><div><dt>蛋白质目标</dt><dd>约 ${fmt(p.proteinTarget)}g</dd></div><div><dt>碳水 / 脂肪</dt><dd>约 ${fmt(p.carbsTarget)}g / ${fmt(p.fatTarget)}g</dd></div><div><dt>当前目标</dt><dd>${escapeHtml(p.goal)}</dd></div></dl></div><div class="profile-card"><h3>身体与训练</h3><dl><div><dt>基础信息</dt><dd>${escapeHtml(p.gender)} · ${p.age} 岁</dd></div><div><dt>身高 / 体重</dt><dd>${p.height} cm / ${p.weight} kg</dd></div><div><dt>训练频率</dt><dd>${escapeHtml(p.frequency)}</dd></div><div><dt>训练类型</dt><dd>${escapeHtml(p.training)}</dd></div><div><dt>日常活动</dt><dd>${escapeHtml(p.activityLabel)}</dd></div></dl></div></div><div class="estimate-note"><strong>这些建议怎样得来</strong><p>静息消耗使用成人 Mifflin–St Jeor 公式估算，再按所选活动等级得到全天维持消耗，并根据目标调整每日建议摄入。训练频率不重复乘入活动系数。结果不是实测值，也不适用于未成年人、孕哺期或需要特殊饮食管理的人。</p></div><button class="profile-action" data-action="onboarding">更新身体信息与目标</button><div class="profile-data-actions"><button class="secondary-button" data-action="export-backup">导出记录备份</button>${state.connection.mode==='live'?'<button class="secondary-button" data-action="import-backup">导入旧版记录</button><button class="secondary-button" data-action="logout">退出登录</button>':''}</div>${renderProfileMemories()}</div></main></div>`;
   }
   function setupOption(action,value,label,selected,description='') {
     return `<button type="button" class="option ${selected?'selected':''}" data-action="${action}" data-value="${escapeHtml(value)}" aria-pressed="${selected}"><strong>${escapeHtml(label)}</strong>${description?`<small>${escapeHtml(description)}</small>`:''}</button>`;
@@ -306,15 +311,15 @@
       const r=nutrition.calculate(d);
       content=`<div class="result-highlight"><span>每日建议热量</span><strong>${fmt(r.caloriesMin)}–${fmt(r.caloriesMax)} <small>kcal</small></strong><p>${escapeHtml(r.strategy)}</p></div><div class="result-journey"><div><span>01 静息消耗</span><strong>${energyRange(r,r.bmrMin,r.bmrMax)} kcal/天</strong><small>根据年龄、身高、体重及所选公式参数估算</small></div><div><span>02 ${d.training==='暂无固定训练'?'日常活动增量':'活动与运动增量'}</span><strong>${energyRange(r,Math.max(0,r.maintenanceMin-r.bmrMin),Math.max(0,r.maintenanceMax-r.bmrMax))} kcal/天</strong><small>含日常走动及所选活动等级中的运动，不是单次训练消耗</small></div><div><span>03 维持消耗</span><strong>${energyRange(r,r.maintenanceMin,r.maintenanceMax)} kcal/天</strong><small>${escapeHtml(r.activityLabel)} · 活动系数 ${r.activityFactor}</small></div><div><span>04 按目标调整</span><strong>${escapeHtml(r.strategy)}</strong><small>${escapeHtml(r.explanation)}</small></div></div><div class="result-macros"><span>蛋白质 <strong>约 ${fmt(r.proteinTarget)}g</strong></span><span>碳水 <strong>约 ${fmt(r.carbsTarget)}g</strong></span><span>脂肪 <strong>约 ${fmt(r.fatTarget)}g</strong></span></div><p class="setup-help">这是一份成人初始估算，不是代谢实测或医疗建议。先按日常记录观察，再结合真实变化调整；未成年人、孕哺期及特殊健康情况不适用。</p>`;
     }
-    const card=`<div class="setup-card"><div class="setup-card-top"><span class="eyebrow">YOUR STARTING POINT / 建立计划</span>${overlay?`<button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>`:''}</div><div class="setup-progress" aria-label="建档进度">${progress.map((label,index)=>`<div class="${index===s?'active':index<s?'done':''}"><i>${index<s?icon('check'):index+1}</i><span>${label}</span></div>`).join('')}</div><div class="setup-content"><h2>${titles[s]}</h2><p class="setup-intro">${['用 1 分钟建立适合你的饮食起点。','选一个当前方向，之后随时可以调整。','让估算更接近你的真实生活。','先看清数字的来路，再开始记录。'][s]}</p>${content}</div><div class="setup-actions">${s>0?`<button class="secondary-button" data-action="onboard-back">上一步</button>`:'<span></span>'}<button class="primary-button" data-action="onboard-next">${s===3?(overlay?'保存新计划':'开始记录'):s===2?'查看我的计划':'继续'} ${icon('chevron')}</button></div></div>`;
+    const card=`<div class="setup-card"><div class="setup-card-top"><span class="eyebrow">YOUR STARTING POINT / 建立计划</span>${overlay?`<button class="icon-button" data-action="close-modal" aria-label="关闭">${icon('close')}</button>`:state.connection.mode==='live'?'<button class="text-button" data-action="logout">退出登录</button>':''}</div><div class="setup-progress" aria-label="建档进度">${progress.map((label,index)=>`<div class="${index===s?'active':index<s?'done':''}"><i>${index<s?icon('check'):index+1}</i><span>${label}</span></div>`).join('')}</div><div class="setup-content"><h2>${titles[s]}</h2><p class="setup-intro">${['用 1 分钟建立适合你的饮食起点。','选一个当前方向，之后随时可以调整。','让估算更接近你的真实生活。','先看清数字的来路，再开始记录。'][s]}</p>${content}</div><div class="setup-actions">${s>0?`<button class="secondary-button" data-action="onboard-back">上一步</button>`:'<span></span>'}<button class="primary-button" data-action="onboard-next">${s===3?(overlay?'保存新计划':'开始记录'):s===2?'查看我的计划':'继续'} ${icon('chevron')}</button></div></div>`;
     if (overlay) return `<div class="modal-backdrop setup-overlay" role="dialog" aria-modal="true" aria-label="更新饮食计划">${card}</div>`;
-    return `<main class="setup-shell"><aside class="setup-aside"><div class="setup-brand"><div class="brand-mark">${icon('spark')}</div><strong>薄肌</strong></div><div class="setup-aside-copy"><div class="eyebrow">FOOD COACH / 饮食教练</div><h1>先了解你，<br>再谈怎么吃。</h1><p>从身体信息与活动习惯出发，给你一份能看懂、能随时调整的饮食起点。</p></div><div class="setup-aside-foot">${state.connection.mode==='live'?'身体信息和记录只保存在本机服务中。':'身体信息只保存在当前浏览器的演示记录中。'} <button class="setup-export" data-action="export-backup">导出旧记录</button>${state.connection.mode==='live'?'<button class="setup-export" data-action="import-backup">导入旧记录</button>':''}</div></aside>${card}<div class="toast" id="toast" role="status"></div></main>`;
+    return `<main class="setup-shell"><aside class="setup-aside"><div class="setup-brand"><div class="brand-mark">${icon('spark')}</div><strong>薄肌</strong></div><div class="setup-aside-copy"><div class="eyebrow">FOOD COACH / 饮食教练</div><h1>先了解你，<br>再谈怎么吃。</h1><p>从身体信息与活动习惯出发，给你一份能看懂、能随时调整的饮食起点。</p></div><div class="setup-aside-foot">${state.connection.mode==='live'?'身体信息和记录保存在你的账号中。':'身体信息只保存在当前浏览器的演示记录中。'} <button class="setup-export" data-action="export-backup">导出旧记录</button>${state.connection.mode==='live'?'<button class="setup-export" data-action="import-backup">导入旧记录</button>':''}</div></aside>${card}<div class="toast" id="toast" role="status"></div></main>`;
   }
   function renderModal() {
     if (!state.modal) return '';
     if (state.modal==='meal') {
       const d=state.mealDraft;
-      return `<div class="modal-backdrop"><div class="modal meal-editor" role="dialog" aria-modal="true" aria-label="${d.id?'修改':'添加'}餐食"><div class="modal-top"><div><div class="eyebrow">MEAL / ${d.date==='today'?'今天':escapeHtml(d.date)}</div><h2>${d.id?'修改这顿吃了什么':'添加一顿餐食'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭" ${state.mealSaving?'disabled':''}>${icon('close')}</button></div><p>写下食物名称和大致份量，每行一种食物。保存后会重新估算这顿并更新当日进度。</p><form id="meal-form"><label class="field">餐次<select id="meal-type" ${state.mealSaving?'disabled':''}>${['早餐','午餐','晚餐','加餐'].map(type=>`<option value="${type}" ${d.type===type?'selected':''}>${type}</option>`).join('')}</select></label><label class="field">吃了什么<textarea id="meal-description" rows="5" maxlength="1000" placeholder="例如：鸡蛋 2 个&#10;吐司 2 片" ${state.mealSaving?'disabled':''}>${escapeHtml(d.description)}</textarea></label>${state.mealError?`<p class="meal-editor-error" role="alert">${escapeHtml(state.mealError)}</p>`:''}<div class="meal-editor-actions"><button type="button" class="secondary-button" data-action="close-modal" ${state.mealSaving?'disabled':''}>取消</button><button type="submit" class="primary-button" ${state.mealSaving?'disabled':''}>${state.mealSaving?'正在估算并保存…':'保存并更新进度'}</button></div></form><p class="meal-editor-note">${state.connection.mode==='live'?'食物描述会发送给 DeepSeek 估算，结果保存到本机。':'当前为前端预览，营养值是本地模拟估算。'}</p></div></div>`;
+      return `<div class="modal-backdrop"><div class="modal meal-editor" role="dialog" aria-modal="true" aria-label="${d.id?'修改':'添加'}餐食"><div class="modal-top"><div><div class="eyebrow">MEAL / ${d.date==='today'?'今天':escapeHtml(d.date)}</div><h2>${d.id?'修改这顿吃了什么':'添加一顿餐食'}</h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭" ${state.mealSaving?'disabled':''}>${icon('close')}</button></div><p>写下食物名称和大致份量，每行一种食物。保存后会重新估算这顿并更新当日进度。</p><form id="meal-form"><label class="field">餐次<select id="meal-type" ${state.mealSaving?'disabled':''}>${['早餐','午餐','晚餐','加餐'].map(type=>`<option value="${type}" ${d.type===type?'selected':''}>${type}</option>`).join('')}</select></label><label class="field">吃了什么<textarea id="meal-description" rows="5" maxlength="1000" placeholder="例如：鸡蛋 2 个&#10;吐司 2 片" ${state.mealSaving?'disabled':''}>${escapeHtml(d.description)}</textarea></label>${state.mealError?`<p class="meal-editor-error" role="alert">${escapeHtml(state.mealError)}</p>`:''}<div class="meal-editor-actions"><button type="button" class="secondary-button" data-action="close-modal" ${state.mealSaving?'disabled':''}>取消</button><button type="submit" class="primary-button" ${state.mealSaving?'disabled':''}>${state.mealSaving?'正在估算并保存…':'保存并更新进度'}</button></div></form><p class="meal-editor-note">${state.connection.mode==='live'?'食物描述会发送给 DeepSeek 估算，结果保存到你的账号中。':'当前为前端预览，营养值是本地模拟估算。'}</p></div></div>`;
     }
     if (state.modal==='delete') {
       const target=state.deleteTarget, entireDay=target.kind==='day';
@@ -539,6 +544,7 @@
     state.meals=snapshot.meals;
     state.messages=snapshot.messages;
     state.archives=snapshot.archives;
+    state.historyPage=snapshot.historyPage||null;
     state.memories=snapshot.memories||[];
     state.serverToday=snapshot.today;
   }
@@ -676,8 +682,33 @@
   document.addEventListener('click', async e => {
     const button=e.target.closest('[data-action]'); if (!button) return;
     const action=button.dataset.action;
+    const historyRequest=++historyLoadId;
     if (action==='nav') {state.view=button.dataset.view;state.historyDetail=null;state.currentFeedback=null;render();window.scrollTo(0,0);}
-    else if (action==='history-day') {state.view='history';state.historyDetail=button.dataset.day;state.currentFeedback=null;render();window.scrollTo(0,0);}
+    else if (action==='history-day') {
+      const day=button.dataset.day;
+      if (state.connection.mode==='live' && day!=='today') {
+        try {
+          const response=await apiFetch(`/api/history/${day}`,{cache:'no-store'});
+          const payload=await response.json();
+          if (historyRequest!==historyLoadId) return;
+          if (!response.ok) throw new Error(payload.error||'读取当天记录失败');
+          state.archives[day]=payload.day;
+        } catch(error) {if (historyRequest===historyLoadId) toast(error.message||'读取当天记录失败');return;}
+      }
+      state.view='history';state.historyDetail=day;state.currentFeedback=null;render();window.scrollTo(0,0);
+    }
+    else if (action==='history-more' && state.historyPage?.nextBefore && !state.historyLoading) {
+      state.historyLoading=true;render();
+      let failureMessage='';
+      try {
+        const response=await apiFetch(`/api/history?before=${state.historyPage.nextBefore}`,{cache:'no-store'});
+        const payload=await response.json();
+        if (!response.ok) throw new Error(payload.error||'读取历史失败');
+        state.archives={...state.archives,...payload.archives};state.historyPage=payload.historyPage;
+      } catch(error) {failureMessage=error.message||'读取历史失败';}
+      finally {state.historyLoading=false;render();}
+      if (failureMessage) toast(failureMessage);
+    }
     else if (action==='history-back') {state.historyDetail=null;render();}
     else if (action==='meal-open') {
       const day=button.dataset.day||'today',type=button.dataset.type||'加餐',id=button.dataset.meal||null;
@@ -716,8 +747,11 @@
     else if (action==='onboarding') {state.modal='onboarding';state.onboardStep=0;state.onboardingDraft=profileDraft(state.profile);render();}
     else if (action==='export-backup') exportBackup();
     else if (action==='logout') {
-      await apiFetch('/api/auth/logout',{method:'POST'});
-      window.location.assign('/login');
+      try {
+        const response=await apiFetch('/api/auth/logout',{method:'POST'});
+        if (!response.ok && response.status!==401) throw new Error('退出失败，请稍后重试');
+        window.location.assign('/login');
+      } catch(error) {toast(error.message||'退出失败，请稍后重试');}
     }
     else if (action==='import-backup') backupInput?.click();
     else if (action==='memory-open') {const memory=state.memories.find(item=>item.id===button.dataset.id);state.memoryEditId=memory?.id||null;state.memoryDraft=memory?.text||'';state.modal='memory';render();}

@@ -1,11 +1,13 @@
 {
-  "name": "boji-food-coach-demo",
+  "name": "boji-food-coach",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "engines": {"node": ">=24"},
   "scripts": {
     "start": "node server.js",
     "invite:owner": "node admin.js owner",
     "invite:friend": "node admin.js member",
-    "test": "node --test nutrition.test.js voice.test.js today.test.js backend.test.js accounts.test.js"
+    "invite:member": "node admin.js member",
+    "test": "node --test nutrition.test.js voice.test.js today.test.js backend.test.js accounts.test.js multiuser.test.js"
   }
 }

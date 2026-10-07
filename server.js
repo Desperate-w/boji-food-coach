@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const {Store} = require('./store.js');
 const {Accounts} = require('./accounts.js');
+const {positiveInteger, clientAddress, Gate, UserStores} = require('./runtime.js');
 
 const ROOT = __dirname;
 function readLocalConfig() {
@@ -24,7 +25,7 @@ function readLocalConfig() {
   return config;
 }
 const localConfig = readLocalConfig();
-const HOST = '127.0.0.1';
+const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
 const MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro';
 const VISION_MODEL = process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash';
@@ -250,7 +251,7 @@ function apiErrorMessage(status, detail) {
   if (status === 402) return 'DeepSeek 账户余额不足，请查看平台用量与余额。';
   if (status === 403 || status === 404) return '当前 Key 无法使用所选模型，请检查 DEEPSEEK_MODEL。';
   if (status === 429) return 'DeepSeek 请求速率达到上限，请稍后再试。';
-  return `模型请求失败（HTTP ${status}）${detail ? `：${detail.slice(0, 160)}` : ''}`;
+  return `模型请求失败（HTTP ${status}），请稍后重试。`;
 }
 
 async function describeImage(image, {apiKey, visionModel, fetchImpl, signal}) {
@@ -268,13 +269,13 @@ async function describeImage(image, {apiKey, visionModel, fetchImpl, signal}) {
   return description.slice(0,3000);
 }
 
-async function estimateManualMeal({apiKey,model,fetchImpl,description,type,profile}) {
+async function estimateManualMeal({apiKey,model,fetchImpl,description,type,profile,signal}) {
   const response=await fetchImpl('https://api.deepseek.com/responses',{
     method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},
     body:JSON.stringify({model,reasoning:{effort:'high'},max_output_tokens:8000,
       instructions:'你是饮食记录的营养估算助手。用户已经吃了输入中的食物。只按用户提供的食物名称和份量估算，不添加未提及的食物。food_items 分别列出主要食物；整餐数据为各食物项之和。无法确定份量时使用常见份量的保守约值，并用热量区间表达不确定性。type 必须使用用户指定的餐次。不要做医学诊断。',
       input:[{role:'user',content:[{type:'input_text',text:JSON.stringify({type,description,goal:profile.goal})}]}],
-      text:{format:{type:'json_schema',name:'manual_meal',schema:mealSchema}}}),
+      text:{format:{type:'json_schema',name:'manual_meal',schema:mealSchema}}}),signal,
   });
   if (!response.ok) throw new Error(apiErrorMessage(response.status,await response.text()));
   const payload=await response.json();
@@ -310,61 +311,77 @@ function cookieValue(req,name) {
   return match?match.slice(name.length+1):null;
 }
 
-function sessionCookie(req,token,maxAge) {
-  const localProxy=['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
-  const secure=req.socket.encrypted || (localProxy && req.headers['x-forwarded-proto']==='https');
+function sessionCookie(req,token,maxAge,trustedProxies,publicOrigin) {
+  const secure=publicOrigin?.startsWith('https://') || req.socket.encrypted || (trustedProxies.includes(req.socket.remoteAddress) && req.headers['x-forwarded-proto']==='https');
   return `boji_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
 }
 
-function loginThrottle() {
-  const attempts=new Map();
-  return (key,limit,windowMs) => {
-    const now=Date.now();
-    if (attempts.size>2000) for (const [entry,value] of attempts) if (value.until<now) attempts.delete(entry);
-    const current=attempts.get(key);
-    if (!current||current.until<now) {attempts.set(key,{count:1,until:now+windowMs});return true;}
-    current.count++;
-    return current.count<=limit;
-  };
-}
-
-function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_MODEL, fetchImpl = globalThis.fetch, dbPath, auth = true, dailyModelLimit = Number(process.env.DAILY_MODEL_LIMIT||30), globalModelLimit = Number(process.env.GLOBAL_DAILY_MODEL_LIMIT||100)} = {}) {
-  dailyModelLimit=Number.isInteger(dailyModelLimit)&&dailyModelLimit>0?dailyModelLimit:30;
-  globalModelLimit=Number.isInteger(globalModelLimit)&&globalModelLimit>0?globalModelLimit:100;
-  const dataDir=dbPath?path.dirname(dbPath):path.join(ROOT,'data');
+function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_MODEL, fetchImpl = globalThis.fetch, dbPath, auth = true,
+  dataDir = process.env.DATA_DIR || path.join(ROOT,'data'), registration = process.env.REGISTRATION_MODE || 'open',
+  publicOrigin = process.env.PUBLIC_ORIGIN || '', trustedProxies = (process.env.TRUSTED_PROXY_IPS || '').split(',').filter(Boolean),
+  dailyModelLimit = process.env.DAILY_MODEL_LIMIT, globalModelLimit = process.env.GLOBAL_DAILY_MODEL_LIMIT,
+  modelConcurrency = process.env.MODEL_CONCURRENCY, passwordConcurrency = process.env.PASSWORD_CONCURRENCY,
+  storeLimit = process.env.STORE_CACHE_LIMIT, storeIdleMs = process.env.STORE_IDLE_MS} = {}) {
+  dailyModelLimit=positiveInteger(dailyModelLimit,30,'DAILY_MODEL_LIMIT');
+  globalModelLimit=positiveInteger(globalModelLimit,1000,'GLOBAL_DAILY_MODEL_LIMIT');
+  if (!['open','invite','closed'].includes(registration)) throw new Error('REGISTRATION_MODE 只能是 open、invite 或 closed。');
+  if (publicOrigin && new URL(publicOrigin).origin!==publicOrigin) throw new Error('PUBLIC_ORIGIN 必须是无路径的完整站点地址。');
+  if (publicOrigin && !/^https?:\/\//.test(publicOrigin)) throw new Error('PUBLIC_ORIGIN 必须使用 http 或 https。');
+  storeLimit=positiveInteger(storeLimit,64,'STORE_CACHE_LIMIT');
+  storeIdleMs=positiveInteger(storeIdleMs,300_000,'STORE_IDLE_MS');
+  passwordConcurrency=positiveInteger(passwordConcurrency,4,'PASSWORD_CONCURRENCY');
+  modelConcurrency=positiveInteger(modelConcurrency,10,'MODEL_CONCURRENCY');
+  dataDir=dbPath?path.dirname(dbPath):path.resolve(dataDir);
   const accounts=auth?new Accounts(path.join(dataDir,'accounts.sqlite')):null;
-  const stores=new Map();
-  const legacyStore=auth?null:new Store(dbPath);
-  const throttle=loginThrottle();
-  const storeFor=account => {
-    if (!accounts) return legacyStore;
-    const filename=account.storageKey==='legacy'?path.join(dataDir,'boji.sqlite'):path.join(dataDir,'users',account.id,'boji.sqlite');
-    if (!stores.has(account.id)) stores.set(account.id,new Store(filename));
-    return stores.get(account.id);
-  };
+  const stores=new UserStores(dataDir,{limit:storeLimit,idleMs:storeIdleMs});
+  const legacyStore=auth?null:new Store(dbPath||path.join(dataDir,'boji.sqlite'));
+  const passwords=new Gate(passwordConcurrency);
+  const models=new Gate(modelConcurrency);
+  const writing=new Set();
+  const cleanup=setInterval(()=>{try {stores.sweep();accounts?.cleanup();} catch {console.error('定期数据维护失败，请检查磁盘和数据库状态。');}},60_000);
+  cleanup.unref();
   const server=http.createServer(async (req, res) => {
+    let releaseStore,releaseWrite,releaseModel;
+    try {
+    res.setHeader('X-Content-Type-Options','nosniff');
+    res.setHeader('Referrer-Policy','same-origin');
+    res.setHeader('X-Frame-Options','DENY');
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    const url=new URL(req.url,'http://localhost');
+    req.url=url.pathname;
+    if (req.url==='/healthz' && ['GET','HEAD'].includes(req.method)) return json(res,200,{ok:true});
+    if (!['GET','HEAD'].includes(req.method)) {
+      const origin=req.headers.origin;
+      if (req.headers['sec-fetch-site']==='cross-site' || (origin && origin!==(publicOrigin||`${req.socket.encrypted||(trustedProxies.includes(req.socket.remoteAddress)&&req.headers['x-forwarded-proto']==='https')?'https':'http'}://${req.headers.host}`))) return json(res,403,{error:'请求来源无效。'});
+    }
     const token=cookieValue(req,'boji_session');
     const account=accounts?accounts.session(token):null;
+    if (accounts && req.url==='/api/auth/config' && req.method==='GET') return json(res,200,{registration});
     if (accounts && req.url==='/api/auth/session' && req.method==='GET') {
       return account?json(res,200,{authenticated:true,username:account.username,csrf:Accounts.csrfForToken(token)}):json(res,401,{authenticated:false});
     }
     if (accounts && ['/api/auth/login','/api/auth/register'].includes(req.url) && req.method==='POST') {
-      const key=`${req.url}:${req.socket.remoteAddress}`;
-      if (!throttle(key,30,15*60_000)) return json(res,429,{error:'尝试次数过多，请稍后再试。'});
+      const key=`${req.url}:${clientAddress(req,trustedProxies)}`;
+      if (!accounts.rateAllowed(key,30,15*60_000)) {res.setHeader('Retry-After','900');return json(res,429,{error:'尝试次数过多，请稍后再试。'});}
+      const releasePassword=passwords.acquire();
+      if (!releasePassword) {res.setHeader('Retry-After','1');return json(res,503,{error:'登录服务繁忙，请稍后重试。'});}
       try {
         if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
         const body=await readRequestJson(req,4096);
         let user;
-        if (req.url==='/api/auth/register') user=accounts.register(body);
+        if (req.url==='/api/auth/register') user=await accounts.register(body,registration);
         else {
-          if (!throttle(`login:${String(body.username||'').toLowerCase()}`,8,15*60_000)) return json(res,429,{error:'此账号尝试次数过多，请稍后再试。'});
-          user=accounts.verify(body.username,body.password);
+          const userKey=`login:${String(body?.username||'').toLowerCase().slice(0,24)}`;
+          if (!accounts.rateAllowed(userKey,8,15*60_000)) {res.setHeader('Retry-After','900');return json(res,429,{error:'此账号尝试次数过多，请稍后再试。'});}
+          user=await accounts.verify(body?.username,body?.password);
           if (!user) return json(res,401,{error:'用户名或密码不正确。'});
+          accounts.clearRate(userKey);
         }
         const session=accounts.createSession(user);
-        res.setHeader('Set-Cookie',sessionCookie(req,session.token,30*24*3600));
+        res.setHeader('Set-Cookie',sessionCookie(req,session.token,30*24*3600,trustedProxies,publicOrigin));
         return json(res,200,{authenticated:true,username:user.username,csrf:session.csrf});
-      } catch(error) {return json(res,400,{error:error.message||'无法完成登录。'});}
+      } catch(error) {return json(res,error.status||400,{error:error.code?.startsWith('ERR_SQLITE')?'暂时无法完成登录，请稍后重试。':(error.message||'无法完成登录。')});}
+      finally {releasePassword();}
     }
     if (accounts && req.url==='/login' && ['GET','HEAD'].includes(req.method)) {
       if (account) {res.writeHead(302,{Location:'/'});res.end();return;}
@@ -384,17 +401,47 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
     if (accounts && !['GET','HEAD'].includes(req.method) && !accounts.validCsrf(account,req.headers['x-csrf-token'])) return json(res,403,{error:'会话校验失败，请刷新页面重试。'});
     if (accounts && req.url==='/api/auth/logout' && req.method==='POST') {
       accounts.revokeSession(token);
-      res.setHeader('Set-Cookie',sessionCookie(req,'',0));
+      res.setHeader('Set-Cookie',sessionCookie(req,'',0,trustedProxies,publicOrigin));
       return json(res,200,{authenticated:false});
     }
-    const store=storeFor(account);
+    if (accounts && req.url.startsWith('/api/') && !['GET','HEAD'].includes(req.method) && !accounts.rateAllowed(`writes:${account.id}`,120,60_000)) {
+      res.setHeader('Retry-After','60');return json(res,429,{error:'操作过于频繁，请稍后重试。'});
+    }
     if (req.method === 'GET' && req.url === '/api/health') {
       json(res,200,{configured:Boolean(apiKey),model,visionModel,provider:'DeepSeek',persistent:true});
       return;
     }
+    if (req.url.startsWith('/api/')) {
+      if (!['GET','HEAD'].includes(req.method)) {
+        const key=account?.id||'legacy';
+        if (writing.has(key)) {res.setHeader('Retry-After','1');return json(res,409,{code:'ACCOUNT_BUSY',error:'上一项操作仍在处理中，请完成后再试。'});}
+        writing.add(key);releaseWrite=()=>writing.delete(key);
+      }
+      if (accounts) {const lease=stores.acquire(account);releaseStore=lease.release;req.userStore=lease.store;}
+    }
+    const store=req.userStore||legacyStore;
+    const snapshot=()=>store.state({focusDate:req.headers['x-history-date']});
+    const reserveModel=()=>{
+      releaseModel=models.acquire();
+      if (!releaseModel) {res.setHeader('Retry-After','3');json(res,503,{code:'MODEL_BUSY',error:'AI 服务繁忙，请稍后重试。'});return false;}
+      if (accounts && !accounts.reserveModelCall(account.id,dailyModelLimit,globalModelLimit)) {json(res,429,{error:'今天的 AI 使用次数已达上限，请明天再试。'});return false;}
+      return true;
+    };
     if (req.method === 'GET' && req.url === '/api/state') {
-      json(res,200,store.state());
+      json(res,200,snapshot());
       return;
+    }
+    if (req.method==='GET' && req.url==='/api/history') {
+      const before=url.searchParams.get('before');
+      if (!validHistoryDate(before,store.today())) return json(res,400,{error:'历史游标无效。'});
+      return json(res,200,store.historyPage(before));
+    }
+    const historyDetailRoute=/^\/api\/history\/(\d{4}-\d{2}-\d{2})$/.exec(req.url);
+    if (req.method==='GET' && historyDetailRoute) {
+      const date=historyDetailRoute[1];
+      if (!validHistoryDate(date,store.today())) return json(res,400,{error:'历史日期无效。'});
+      const day=store.day(date);
+      return day.meals.length||day.messages.length?json(res,200,{day}):json(res,404,{error:'当天没有记录。'});
     }
     if (req.method === 'GET' && req.url === '/api/export') {
       res.setHeader('Content-Disposition','attachment; filename="boji-backup.json"');
@@ -404,17 +451,17 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
     if (req.method === 'GET' && /^\/api\/media\/[a-f0-9-]{36}$/.test(req.url)) {
       const media=store.readMedia(req.url.slice('/api/media/'.length));
       if (!media) return json(res,404,{error:'照片不存在。'});
-      res.writeHead(200,{'Content-Type':media.mime,'Cache-Control':'private, max-age=3600','X-Content-Type-Options':'nosniff'});
+      res.writeHead(200,{'Content-Type':media.mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
       res.end(media.bytes);return;
     }
     if (req.method === 'DELETE' && /^\/api\/media\/[a-f0-9-]{36}$/.test(req.url)) {
       const deleted=store.deleteMedia(req.url.slice('/api/media/'.length));
-      json(res,deleted?200:404,deleted?{deleted:true,state:store.state()}:{error:'照片不存在。'});
+      json(res,deleted?200:404,deleted?{deleted:true,state:snapshot()}:{error:'照片不存在。'});
       return;
     }
     if (req.method === 'GET' && /^\/api\/turn\/[a-zA-Z0-9-]{8,80}$/.test(req.url)) {
       const prior=store.priorTurn(req.url.slice('/api/turn/'.length));
-      json(res,prior?200:404,prior?{...prior.result,state:store.state()}:{error:'请求尚未完成或不存在。'});
+      json(res,prior?200:404,prior?{...prior.result,state:snapshot()}:{error:'请求尚未完成或不存在。'});
       return;
     }
     if (req.method === 'PUT' && req.url === '/api/profile') {
@@ -422,7 +469,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
         const body=await readRequestJson(req);
         const profile=store.saveProfile(body.profile||body,body.timezone);
-        json(res,200,{profile,state:store.state()});
+        json(res,200,{profile,state:snapshot()});
       } catch(error) { json(res,error.status||500,{error:error.message||'保存资料失败'}); }
       return;
     }
@@ -441,10 +488,15 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         if (typeof body.description!=='string'||!body.description.trim()||body.description.trim().length>1000) return json(res,400,{error:'请填写 1–1000 字的食物和份量。'});
         if (!apiKey) return json(res,503,{error:'请先配置 DeepSeek API Key，才能估算手动填写的餐食。'});
         const description=body.description.trim();
-        if (accounts && !accounts.reserveModelCall(account.id,dailyModelLimit,globalModelLimit)) return json(res,429,{error:'今天的 AI 使用次数已达上限，请明天再试。'});
-        const data=await estimateManualMeal({apiKey,model,fetchImpl,description,type:body.type,profile});
+        if (!reserveModel()) return;
+        const abort=new AbortController();
+        const onClose=()=>abort.abort();res.once('close',onClose);
+        let data;
+        try {data=await estimateManualMeal({apiKey,model,fetchImpl,description,type:body.type,profile,signal:AbortSignal.any([abort.signal,AbortSignal.timeout(120_000)])});}
+        finally {res.removeListener('close',onClose);}
+        if (res.destroyed) return;
         const meal=store.saveManualMeal({id:manualRoute[1]||null,date,type:body.type,description,data});
-        json(res,manualRoute[1]?200:201,{meal,state:store.state()});
+        json(res,manualRoute[1]?200:201,{meal,state:snapshot()});
       } catch(error) {json(res,error.status||500,{error:error.message||'保存餐食失败'});}
       return;
     }
@@ -452,7 +504,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
     if (req.method==='DELETE'&&deleteMealRoute) {
       try {
         const deleted=store.deleteMeal(deleteMealRoute[1]);
-        json(res,deleted?200:404,deleted?{deleted,state:store.state()}:{error:'餐食记录不存在。'});
+        json(res,deleted?200:404,deleted?{deleted,state:snapshot()}:{error:'餐食记录不存在。'});
       } catch(error) {json(res,error.status||500,{error:error.message||'删除餐食失败'});}
       return;
     }
@@ -462,7 +514,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         const date=deleteDayRoute[1];
         if (!validHistoryDate(date,store.today())) return json(res,400,{error:'历史日期无效。'});
         const deleted=store.deleteDay(date);
-        json(res,deleted?200:404,deleted?{...deleted,state:store.state()}:{error:'当天没有可删除的记录。'});
+        json(res,deleted?200:404,deleted?{...deleted,state:snapshot()}:{error:'当天没有可删除的记录。'});
       } catch(error) {json(res,error.status||500,{error:error.message||'删除当天记录失败'});}
       return;
     }
@@ -479,7 +531,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
       try {
         const body=await readRequestJson(req);
         const memory=store.saveMemory(body.text);
-        json(res,201,{memory,state:store.state()});
+        json(res,201,{memory,state:snapshot()});
       } catch(error) {json(res,error.status||400,{error:error.message||'保存习惯失败'});}
       return;
     }
@@ -487,7 +539,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
       try {
         const id=req.url.slice('/api/memories/'.length);
         const changed=req.method==='DELETE'?store.deleteMemory(id):store.updateMemory(id,(await readRequestJson(req)).text);
-        json(res,changed?200:404,changed?{changed:true,state:store.state()}:{error:'习惯不存在。'});
+        json(res,changed?200:404,changed?{changed:true,state:snapshot()}:{error:'习惯不存在。'});
       } catch(error) {json(res,error.status||400,{error:error.message||'更新习惯失败'});}
       return;
     }
@@ -514,10 +566,10 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         const prior=store.priorTurn(body.requestId);
         if (prior) {
           if (prior.hash!==requestHash) return json(res,409,{error:'请求 ID 已用于另一条消息。'});
-          return json(res,200,{...prior.result,state:store.state(),replayed:true});
+          return json(res,200,{...prior.result,state:snapshot(),replayed:true});
         }
-        if (accounts && !accounts.reserveModelCall(account.id,dailyModelLimit,globalModelLimit)) return json(res,429,{error:'今天的 AI 使用次数已达上限，请明天再试。'});
-        const state=store.state();
+        if (!reserveModel()) return;
+        const state=store.state({focusDate:body.targetMealId?store.manualTarget(body.targetMealId)?.date:undefined});
         const clarification=store.clarification();
         abort = new AbortController();
         res.on('close', () => {clientClosed=true;abort.abort();});
@@ -583,11 +635,14 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
           }
         }
         if (!completed) throw new Error('模型连接中断，请重试');
-        const allMeals=[...state.meals,...Object.values(state.archives).flatMap(archive=>archive.meals||[])];
-        const result = enforceRecordBoundary(validateResult(JSON.parse(outputText)),body.text,Boolean(body.image),body.targetMealId,clarification,allMeals);
+        if (clientClosed) return;
+        const checked=validateResult(JSON.parse(outputText));
+        // UI pagination must not hide potential correction targets or create a false unique match.
+        const allMeals=checked.action==='correction'?store.meals():[];
+        const result = enforceRecordBoundary(checked,body.text,Boolean(body.image),body.targetMealId,clarification,allMeals);
         store.logModelCall({requestId:body.requestId,model,purpose:'nutrition-turn',status:'completed',inputTokens:usage?.input_tokens,outputTokens:usage?.output_tokens});
         const committed=store.commitTurn({requestId:body.requestId,requestHash,conversationDate:state.activeDate,mealDate:resolveMealDate(result,body.text,state.activeDate,clarification),text:body.text.trim(),image:body.image||null,imageDescription,source,result,reasoning,elapsedSeconds:Math.max(1,Math.round((Date.now()-startedAt)/1000))});
-        sendEvent(res, 'result', {...committed,state:store.state(),requestId:body.requestId});
+        sendEvent(res, 'result', {...committed,state:snapshot(),requestId:body.requestId});
         res.end();
       } catch (error) {
         if (res.writableEnded || clientClosed) return;
@@ -606,20 +661,32 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
       res.writeHead(200, {'Content-Type': `${file[1]}; charset=utf-8`, 'Cache-Control': 'no-store'});
       res.end(req.method==='HEAD'?undefined:content);
     } catch { res.writeHead(500); res.end('Could not load file'); }
+    } catch(error) {
+      console.error(`请求失败：${error.code||'INTERNAL_ERROR'}`);
+      if (!res.headersSent && !res.destroyed) json(res,error.status||500,{error:error.status?error.message:'服务暂时不可用，请稍后重试。'});
+      else if (!res.writableEnded) res.end();
+    } finally {releaseModel?.();releaseStore?.();releaseWrite?.();}
   });
-  server.on('close',()=>{legacyStore?.close();for (const store of stores.values()) store.close();accounts?.close();});
+  server.requestTimeout=30_000;
+  server.headersTimeout=15_000;
+  server.on('close',()=>{clearInterval(cleanup);legacyStore?.close();stores.close();accounts?.close();});
   return server;
 }
 
 if (require.main === module) {
   const server = createAppServer();
+  const shutdown=()=>{
+    server.close(()=>process.exit(0));
+    setTimeout(()=>process.exit(1),150_000).unref();
+  };
+  process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);
   server.on('error', error => {
     console.error(`无法启动本地服务：${error.message}`);
     process.exitCode = 1;
   });
   server.listen(PORT, HOST, () => {
-    console.log(`薄肌 Demo 已启动：http://${HOST}:${PORT}`);
-    console.log(API_KEY ? `LLM 已配置：文字 ${MODEL}，图片 ${VISION_MODEL}` : '未配置 API Key；页面将使用本地演示回复。');
+    console.log(`薄肌服务已启动：http://${HOST}:${PORT}`);
+    console.log(API_KEY ? `LLM 已配置：文字 ${MODEL}，图片 ${VISION_MODEL}` : '未配置 API Key；可管理资料，AI 功能暂不可用。');
   });
 }
 

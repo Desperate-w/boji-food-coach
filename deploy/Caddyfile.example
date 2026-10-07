@@ -1,4 +1,7 @@
 你的域名 {
     encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
+    reverse_proxy 127.0.0.1:3000 {
+        header_up X-Real-IP {remote_host}
+        flush_interval -1
+    }
 }

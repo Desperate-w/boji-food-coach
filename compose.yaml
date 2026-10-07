@@ -1,0 +1,47 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    stop_grace_period: 150s
+    environment:
+      PUBLIC_ORIGIN: https://${DOMAIN:?请在 .env 中配置 DOMAIN}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?请在 .env 中配置 DEEPSEEK_API_KEY}
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
+      DAILY_MODEL_LIMIT: ${DAILY_MODEL_LIMIT:-30}
+      GLOBAL_DAILY_MODEL_LIMIT: ${GLOBAL_DAILY_MODEL_LIMIT:-1000}
+      MODEL_CONCURRENCY: ${MODEL_CONCURRENCY:-10}
+      STORE_CACHE_LIMIT: ${STORE_CACHE_LIMIT:-64}
+      TRUSTED_PROXY_IPS: 172.30.0.2
+    volumes:
+      - app_data:/app/data
+    networks:
+      boji:
+        ipv4_address: 172.30.0.3
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?请在 .env 中配置 DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      boji:
+        ipv4_address: 172.30.0.2
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:
+networks:
+  boji:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

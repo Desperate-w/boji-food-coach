@@ -3,4 +3,5 @@ api-key.local.json
 .env.*
 node_modules/
 data/
+backups/
 .DS_Store

@@ -1,10 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const {promisify} = require('node:util');
 const {DatabaseSync} = require('node:sqlite');
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
-const passwordHash = (password, salt) => crypto.scryptSync(password, salt, 64).toString('hex');
+const scrypt = promisify(crypto.scrypt);
+const passwordHash = async (password, salt) => (await scrypt(password, salt, 64)).toString('hex');
 const validUsername = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_]{2,23}$/.test(value);
 const validPassword = value => typeof value === 'string' && value.length >= 12 && value.length <= 128;
 
@@ -12,7 +14,7 @@ class Accounts {
   constructor(filename = path.join(__dirname, 'data', 'accounts.sqlite')) {
     fs.mkdirSync(path.dirname(filename), {recursive:true, mode:0o700});
     this.db = new DatabaseSync(filename);
-    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS account (
         id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
@@ -32,6 +34,9 @@ class Accounts {
         day TEXT NOT NULL, calls INTEGER NOT NULL, PRIMARY KEY(account_id,day)
       );
       CREATE TABLE IF NOT EXISTS global_model_usage (day TEXT PRIMARY KEY, calls INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS auth_rate_limit (key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS session_expiry_idx ON session(expires_at);
+      CREATE INDEX IF NOT EXISTS auth_rate_expiry_idx ON auth_rate_limit(expires_at);
     `);
   }
 
@@ -47,38 +52,41 @@ class Accounts {
     return code;
   }
 
-  register({inviteCode,username,password}) {
+  async register({inviteCode,username,password}, registration='invite') {
     if (!validUsername(username)) throw new Error('用户名需以字母开头，使用 3–24 位字母、数字或下划线。');
     if (!validPassword(password)) throw new Error('密码需要 12–128 个字符。');
-    if (typeof inviteCode!=='string' || inviteCode.length>100) throw new Error('邀请码无效或已过期。');
+    if (inviteCode !== undefined && (typeof inviteCode!=='string' || !inviteCode || inviteCode.length>100)) throw new Error('邀请码无效或已过期。');
+    if (!inviteCode && registration!=='open') throw new Error(registration==='closed'?'当前暂未开放注册。':'请输入有效的邀请码。');
     const normalized=username.toLowerCase();
     const salt=crypto.randomBytes(24).toString('hex');
-    const hash=passwordHash(password,salt);
+    const hash=await passwordHash(password,salt);
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      const invite=this.db.prepare('SELECT role,expires_at,used_by FROM invite WHERE code_hash=?').get(digest(inviteCode));
-      if (!invite || invite.used_by || invite.expires_at<Date.now()) throw new Error('邀请码无效或已过期。');
-      if (invite.role==='owner' && this.db.prepare("SELECT id FROM account WHERE role='owner'").get()) throw new Error('站长账号已存在。');
+      const invite=inviteCode?this.db.prepare('SELECT role,expires_at,used_by FROM invite WHERE code_hash=?').get(digest(inviteCode)):null;
+      if (inviteCode && (!invite || invite.used_by || invite.expires_at<Date.now())) throw new Error('邀请码无效或已过期。');
+      const role=invite?.role||'member';
+      if (registration==='closed' && role!=='owner') throw new Error('当前暂未开放注册。');
+      if (role==='owner' && this.db.prepare("SELECT id FROM account WHERE role='owner'").get()) throw new Error('站长账号已存在。');
       if (this.db.prepare('SELECT id FROM account WHERE username=?').get(normalized)) throw new Error('用户名已被使用。');
       const id=crypto.randomUUID();
-      const storageKey=invite.role==='owner'?'legacy':id;
+      const storageKey=role==='owner'?'legacy':id;
       this.db.prepare('INSERT INTO account(id,username,password_hash,salt,role,storage_key,created_at) VALUES(?,?,?,?,?,?,?)')
-        .run(id,normalized,hash,salt,invite.role,storageKey,new Date().toISOString());
-      this.db.prepare('UPDATE invite SET used_by=? WHERE code_hash=?').run(id,digest(inviteCode));
+        .run(id,normalized,hash,salt,role,storageKey,new Date().toISOString());
+      if (inviteCode) this.db.prepare('UPDATE invite SET used_by=? WHERE code_hash=?').run(id,digest(inviteCode));
       this.db.exec('COMMIT');
-      return {id,username:normalized,role:invite.role,storageKey};
+      return {id,username:normalized,role,storageKey};
     } catch(error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
-  verify(username,password) {
+  async verify(username,password) {
     if (typeof username!=='string'||typeof password!=='string'||password.length>128) return null;
     const row=this.db.prepare('SELECT * FROM account WHERE username=?').get(username.toLowerCase());
     if (!row) {
-      passwordHash('invalid-password', 'fixed-salt-for-unknown-user');
+      await passwordHash('invalid-password', 'fixed-salt-for-unknown-user');
       return null;
     }
     const expected=Buffer.from(row.password_hash,'hex');
-    const actual=Buffer.from(passwordHash(password,row.salt),'hex');
+    const actual=Buffer.from(await passwordHash(password,row.salt),'hex');
     if (!crypto.timingSafeEqual(expected,actual)) return null;
     return {id:row.id,username:row.username,role:row.role,storageKey:row.storage_key};
   }
@@ -109,6 +117,23 @@ class Accounts {
 
   revokeSession(token) {
     if (typeof token==='string' && token.length<=100) this.db.prepare('DELETE FROM session WHERE token_hash=?').run(digest(token));
+  }
+
+  rateAllowed(key, limit, windowMs) {
+    const hashed=digest(key), now=Date.now();
+    this.db.prepare(`INSERT INTO auth_rate_limit(key,attempts,expires_at) VALUES(?,1,?)
+      ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN expires_at<=? THEN 1 ELSE attempts+1 END,
+      expires_at=CASE WHEN expires_at<=? THEN excluded.expires_at ELSE expires_at END`).run(hashed,now+windowMs,now,now);
+    return this.db.prepare('SELECT attempts FROM auth_rate_limit WHERE key=?').get(hashed).attempts<=limit;
+  }
+  clearRate(key) { this.db.prepare('DELETE FROM auth_rate_limit WHERE key=?').run(digest(key)); }
+  cleanup() {
+    const now=Date.now(), cutoff=new Date(now-90*86400_000).toISOString().slice(0,10);
+    this.db.prepare('DELETE FROM session WHERE expires_at<=?').run(now);
+    this.db.prepare('DELETE FROM invite WHERE expires_at<=?').run(now);
+    this.db.prepare('DELETE FROM auth_rate_limit WHERE expires_at<=?').run(now);
+    this.db.prepare('DELETE FROM daily_model_usage WHERE day<?').run(cutoff);
+    this.db.prepare('DELETE FROM global_model_usage WHERE day<?').run(cutoff);
   }
 
   reserveModelCall(accountId, limit, globalLimit) {

@@ -1,0 +1,7 @@
+# Only application source and tests enter the build context.
+*
+!package.json
+!*.js
+!*.html
+!*.css
+!Dockerfile

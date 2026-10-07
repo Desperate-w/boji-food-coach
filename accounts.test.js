@@ -21,7 +21,7 @@ test('invited users are isolated from legacy data and each other',async()=>{
   let accountDb=new Accounts(path.join(dir,'accounts.sqlite'));
   const ownerCode=accountDb.createInvite('owner');
   accountDb.close();
-  const server=createAppServer({apiKey:'test-key',dbPath,dailyModelLimit:1,fetchImpl:async()=>new Response(`data: ${JSON.stringify({type:'response.completed',response:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({action:'question',meal:null,target_meal_id:null,occurred_on:null,reply:'好的。'})}]}]}})}\n\n`,{headers:{'Content-Type':'text/event-stream'}})});
+  const server=createAppServer({apiKey:'test-key',dbPath,registration:'invite',dailyModelLimit:1,fetchImpl:async()=>new Response(`data: ${JSON.stringify({type:'response.completed',response:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({action:'question',meal:null,target_meal_id:null,occurred_on:null,reply:'好的。'})}]}]}})}\n\n`,{headers:{'Content-Type':'text/event-stream'}})});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${server.address().port}`;
   const call=async(route,{method='GET',body,cookie,csrf}={})=>{
@@ -45,7 +45,9 @@ test('invited users are isolated from legacy data and each other',async()=>{
     const ownerCookie=owner.headers.get('set-cookie').split(';')[0];
     const ownerCsrf=owner.body.csrf;
     assert.equal((await call('/api/state',{cookie:ownerCookie})).body.meals[0].id,legacyMealId);
-    assert.equal((await call(legacyPhoto,{cookie:ownerCookie})).status,200);
+    const ownerPhoto=await call(legacyPhoto,{cookie:ownerCookie});
+    assert.equal(ownerPhoto.status,200);
+    assert.equal(ownerPhoto.headers.get('cache-control'),'no-store');
     assert.equal((await call('/api/profile',{method:'PUT',body:{profile},cookie:ownerCookie})).status,403);
 
     accountDb=new Accounts(path.join(dir,'accounts.sqlite'));
@@ -82,7 +84,7 @@ test('account session and personal plan survive a server restart',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'boji-auth-restart-'));
   const dbPath=path.join(dir,'boji.sqlite');
   const accounts=new Accounts(path.join(dir,'accounts.sqlite'));
-  const owner=accounts.register({inviteCode:accounts.createInvite('owner'),username:'restartowner',password:'very-long-password'});
+  const owner=await accounts.register({inviteCode:accounts.createInvite('owner'),username:'restartowner',password:'very-long-password'});
   const session=accounts.createSession(owner);
   accounts.close();
   const request=async(server,route,method='GET',body)=>{

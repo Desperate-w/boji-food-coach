@@ -9,12 +9,17 @@ User=boji
 Group=boji
 WorkingDirectory=/opt/boji
 EnvironmentFile=/etc/boji.env
+Environment=NODE_ENV=production
+Environment=DATA_DIR=/var/lib/boji
+StateDirectory=boji
+StateDirectoryMode=0700
 ExecStart=/usr/bin/node /opt/boji/server.js
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=150
 NoNewPrivileges=true
-ProtectSystem=full
-ReadWritePaths=/opt/boji/data
+ProtectSystem=strict
+ReadWritePaths=/var/lib/boji
 
 [Install]
 WantedBy=multi-user.target

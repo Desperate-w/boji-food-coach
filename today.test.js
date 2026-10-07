@@ -26,11 +26,13 @@ function openToday(options={}) {
   saved.profile={...profile,...context.window.BojiNutrition.calculate(profile)};
   storage.value=JSON.stringify(saved);
   if (options.live) {
-    const serverState={profile:saved.profile,activeDate:new Date().toLocaleDateString('sv-SE'),meals:[],messages:[{role:'user',text:'测试记录'}],archives:{},memories:[],today:{calories:0,protein:0,carbs:0,fat:0,fiber:0,status:'待记录',advice:'今天还没有饮食记录。'}};
+    const serverState={profile:saved.profile,activeDate:new Date().toLocaleDateString('sv-SE'),meals:[],messages:[{role:'user',text:'测试记录'}],archives:{},memories:[],today:{calories:0,protein:0,carbs:0,fat:0,fiber:0,status:'待记录',advice:'今天还没有饮食记录。'},...(options.live.state||{})};
     context.fetch=async (url,request) => {
       if (url==='/api/auth/session') return {ok:true,json:async()=>({authenticated:true,csrf:'test-csrf'})};
       if (url==='/api/health') return {ok:true,json:async()=>({configured:true,model:'test'})};
       if (url==='/api/state') return {ok:true,json:async()=>serverState};
+      if ((!request?.method||request.method==='GET') && url.startsWith('/api/history?')) return {ok:true,json:async()=>options.live.historyPage};
+      if ((!request?.method||request.method==='GET') && url.startsWith('/api/history/')) return {ok:true,json:async()=>({day:options.live.historyDay})};
       if (request?.method==='DELETE') return options.live.deleteResponse;
       throw new Error(`Unexpected request: ${url}`);
     };
@@ -150,4 +152,26 @@ test('Profile shows resting, activity and maintenance energy without double coun
   assert.match(today.app.innerHTML,new RegExp(`${active}<\\/strong>`));
   assert.match(today.app.innerHTML,new RegExp(`<strong>${p.maintenanceMin.toLocaleString('en-US')}<\\/strong>`));
   assert.match(today.app.innerHTML,/不能可靠地拆出单次运动消耗/);
+});
+
+test('live History loads older dates and full conversation on demand without mislabeling backdated meals',async()=>{
+  const oldDate='2026-08-01';
+  const meal={id:'old-meal',name:'补记早餐',type:'早餐',calories:80,protein:6,carbs:1,fat:5,fiber:0};
+  const archive={date:oldDate,meals:[meal],messages:[],messageCount:1,calories:80,protein:6,status:'待记录',summary:'历史记录'};
+  const today=openToday({live:{
+    state:{messages:[{role:'assistant',text:'已补记',receipt:meal,latestReceipt:meal}],historyPage:{hasMore:true,nextBefore:'2026-09-01'}},
+    historyPage:{archives:{[oldDate]:archive},historyPage:{hasMore:false,nextBefore:oldDate}},
+    historyDay:{...archive,messages:[{role:'assistant',live:true,text:'以前的反馈',reasoningText:'历史思考文本'}]},
+  }});
+  await new Promise(resolve=>setImmediate(resolve));
+  await today.click('history-day',{day:'today'});
+  assert.match(today.app.innerHTML,/补记早餐/);
+  assert.doesNotMatch(today.app.innerHTML,/这顿餐食记录已删除/);
+  today.click('history-back');
+  assert.match(today.app.innerHTML,/加载更早的记录/);
+  await today.click('history-more');
+  assert.match(today.app.innerHTML,/1 条交流/);
+  await today.click('history-day',{day:oldDate});
+  assert.match(today.app.innerHTML,/以前的反馈/);
+  assert.match(today.app.innerHTML,/历史思考文本/);
 });
