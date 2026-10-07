@@ -1,6 +1,17 @@
-# 薄肌本机 API（MVP）
+# 薄肌邀请试用 API
 
-服务只监听 `127.0.0.1`。所有数据由同一个本机用户使用，尚无账号认证或远程部署支持。JSON 接口返回 `Cache-Control: no-store`。日期采用资料中保存的 IANA 时区；时间戳以 UTC ISO 8601 保存。
+Node 服务仍只监听 `127.0.0.1`，公网部署通过 HTTPS 反向代理访问。所有私人页面和数据 API 都要求登录；非 GET 请求额外使用会话 CSRF token。每个账号有独立 SQLite 和媒体目录；原单用户数据库由第一个站长账号接管。JSON 接口返回 `Cache-Control: no-store`。日期采用各自资料中保存的 IANA 时区；时间戳以 UTC ISO 8601 保存。
+
+## 账号接口
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /api/auth/register` | 提交一次性 `inviteCode`、`username`、`password`，创建独立账号并设置 HttpOnly、SameSite=Strict 会话 Cookie。 |
+| `POST /api/auth/login` | 用用户名和密码登录；密码以 scrypt 加盐摘要保存。 |
+| `GET /api/auth/session` | 返回当前用户名及供浏览器发送非 GET 请求的 `csrf` token；未登录返回 401。 |
+| `POST /api/auth/logout` | 注销当前会话并清除 Cookie。 |
+
+站长与朋友的邀请码只能通过服务器管理员命令生成，没有公开邀请生成 API。邀请码一次有效，默认 72 小时后过期。除登录和注册外，所有写请求必须发送 `X-CSRF-Token`；未登录返回 401，缺失或错误 token 返回 403。模型请求按账号与全站每日配额分别限制，超额返回 429。
 
 ## 模型路由
 
@@ -34,4 +45,4 @@
 
 History 手动餐食接口只接受过去一年内的有效日期。用户选定的餐次优先于模型推断；修改保留原日期与餐食 ID，不新增对话消息。保存成功后的 `state` 是当前营养与目标进度的权威结果；前端立即替换显示。手动填写的食物描述会发送给 DeepSeek 估算，未配置密钥时接口返回 503。
 
-数据库在 `data/boji.sqlite`，照片在 `data/media/`，均已排除 Git。数据表包括资料、计划版本、餐食、食物项、修订、交流、追问、请求去重、模型调用、长期习惯和照片；`daily_nutrition_state` 视图按有效餐食汇总。`meta.schema_version` 用于后续迁移。备份文件含私人资料和照片，请妥善保管。
+账号索引在 `data/accounts.sqlite`。站长旧数据库在 `data/boji.sqlite`，照片在 `data/media/`；新账号的数据库和照片分别在 `data/users/<账号 ID>/`，均已排除 Git。数据表包括资料、计划版本、餐食、食物项、修订、交流、追问、请求去重、模型调用、长期习惯和照片；`daily_nutrition_state` 视图按有效餐食汇总。`meta.schema_version` 用于后续迁移。备份文件含私人资料和照片，请妥善保管。

@@ -23,7 +23,7 @@ async function withServer(fn) {
     if (output.incomplete) return new Response(`data: ${JSON.stringify({type:'response.incomplete'})}\n\n`,{headers:{'Content-Type':'text/event-stream'}});
     return fakeStream(output);
   };
-  const server=createAppServer({apiKey:'test-key',fetchImpl,dbPath:path.join(dir,'boji.sqlite')});
+  const server=createAppServer({apiKey:'test-key',fetchImpl,dbPath:path.join(dir,'boji.sqlite'),auth:false});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base=`http://127.0.0.1:${server.address().port}`;
   const request=async (route,method='GET',body)=>{

@@ -3,6 +3,7 @@ const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {Store} = require('./store.js');
+const {Accounts} = require('./accounts.js');
 
 const ROOT = __dirname;
 function readLocalConfig() {
@@ -304,9 +305,89 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_MODEL, fetchImpl = globalThis.fetch, dbPath} = {}) {
-  const store=new Store(dbPath);
+function cookieValue(req,name) {
+  const match=String(req.headers.cookie||'').split(';').map(part=>part.trim()).find(part=>part.startsWith(`${name}=`));
+  return match?match.slice(name.length+1):null;
+}
+
+function sessionCookie(req,token,maxAge) {
+  const localProxy=['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+  const secure=req.socket.encrypted || (localProxy && req.headers['x-forwarded-proto']==='https');
+  return `boji_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
+}
+
+function loginThrottle() {
+  const attempts=new Map();
+  return (key,limit,windowMs) => {
+    const now=Date.now();
+    if (attempts.size>2000) for (const [entry,value] of attempts) if (value.until<now) attempts.delete(entry);
+    const current=attempts.get(key);
+    if (!current||current.until<now) {attempts.set(key,{count:1,until:now+windowMs});return true;}
+    current.count++;
+    return current.count<=limit;
+  };
+}
+
+function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_MODEL, fetchImpl = globalThis.fetch, dbPath, auth = true, dailyModelLimit = Number(process.env.DAILY_MODEL_LIMIT||30), globalModelLimit = Number(process.env.GLOBAL_DAILY_MODEL_LIMIT||100)} = {}) {
+  dailyModelLimit=Number.isInteger(dailyModelLimit)&&dailyModelLimit>0?dailyModelLimit:30;
+  globalModelLimit=Number.isInteger(globalModelLimit)&&globalModelLimit>0?globalModelLimit:100;
+  const dataDir=dbPath?path.dirname(dbPath):path.join(ROOT,'data');
+  const accounts=auth?new Accounts(path.join(dataDir,'accounts.sqlite')):null;
+  const stores=new Map();
+  const legacyStore=auth?null:new Store(dbPath);
+  const throttle=loginThrottle();
+  const storeFor=account => {
+    if (!accounts) return legacyStore;
+    const filename=account.storageKey==='legacy'?path.join(dataDir,'boji.sqlite'):path.join(dataDir,'users',account.id,'boji.sqlite');
+    if (!stores.has(account.id)) stores.set(account.id,new Store(filename));
+    return stores.get(account.id);
+  };
   const server=http.createServer(async (req, res) => {
+    const token=cookieValue(req,'boji_session');
+    const account=accounts?accounts.session(token):null;
+    if (accounts && req.url==='/api/auth/session' && req.method==='GET') {
+      return account?json(res,200,{authenticated:true,username:account.username,csrf:Accounts.csrfForToken(token)}):json(res,401,{authenticated:false});
+    }
+    if (accounts && ['/api/auth/login','/api/auth/register'].includes(req.url) && req.method==='POST') {
+      const key=`${req.url}:${req.socket.remoteAddress}`;
+      if (!throttle(key,30,15*60_000)) return json(res,429,{error:'尝试次数过多，请稍后再试。'});
+      try {
+        if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
+        const body=await readRequestJson(req,4096);
+        let user;
+        if (req.url==='/api/auth/register') user=accounts.register(body);
+        else {
+          if (!throttle(`login:${String(body.username||'').toLowerCase()}`,8,15*60_000)) return json(res,429,{error:'此账号尝试次数过多，请稍后再试。'});
+          user=accounts.verify(body.username,body.password);
+          if (!user) return json(res,401,{error:'用户名或密码不正确。'});
+        }
+        const session=accounts.createSession(user);
+        res.setHeader('Set-Cookie',sessionCookie(req,session.token,30*24*3600));
+        return json(res,200,{authenticated:true,username:user.username,csrf:session.csrf});
+      } catch(error) {return json(res,400,{error:error.message||'无法完成登录。'});}
+    }
+    if (accounts && req.url==='/login' && ['GET','HEAD'].includes(req.method)) {
+      if (account) {res.writeHead(302,{Location:'/'});res.end();return;}
+      const page=await fs.readFile(path.join(ROOT,'login.html'));
+      res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(req.method==='HEAD'?undefined:page);return;
+    }
+    if (accounts && ['/login.js','/styles.css'].includes(req.url) && ['GET','HEAD'].includes(req.method)) {
+      const filename=req.url==='/login.js'?'login.js':'styles.css';
+      const content=await fs.readFile(path.join(ROOT,filename));
+      res.writeHead(200,{'Content-Type':filename.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store'});res.end(req.method==='HEAD'?undefined:content);return;
+    }
+    if (accounts && !account) {
+      if (['GET','HEAD'].includes(req.method) && (req.url==='/'||req.url==='/index.html')) {res.writeHead(302,{Location:'/login'});res.end();return;}
+      if (req.url.startsWith('/api/')) return json(res,401,{error:'请先登录。'});
+      res.writeHead(404);res.end('Not found');return;
+    }
+    if (accounts && !['GET','HEAD'].includes(req.method) && !accounts.validCsrf(account,req.headers['x-csrf-token'])) return json(res,403,{error:'会话校验失败，请刷新页面重试。'});
+    if (accounts && req.url==='/api/auth/logout' && req.method==='POST') {
+      accounts.revokeSession(token);
+      res.setHeader('Set-Cookie',sessionCookie(req,'',0));
+      return json(res,200,{authenticated:false});
+    }
+    const store=storeFor(account);
     if (req.method === 'GET' && req.url === '/api/health') {
       json(res,200,{configured:Boolean(apiKey),model,visionModel,provider:'DeepSeek',persistent:true});
       return;
@@ -360,6 +441,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         if (typeof body.description!=='string'||!body.description.trim()||body.description.trim().length>1000) return json(res,400,{error:'请填写 1–1000 字的食物和份量。'});
         if (!apiKey) return json(res,503,{error:'请先配置 DeepSeek API Key，才能估算手动填写的餐食。'});
         const description=body.description.trim();
+        if (accounts && !accounts.reserveModelCall(account.id,dailyModelLimit,globalModelLimit)) return json(res,429,{error:'今天的 AI 使用次数已达上限，请明天再试。'});
         const data=await estimateManualMeal({apiKey,model,fetchImpl,description,type:body.type,profile});
         const meal=store.saveManualMeal({id:manualRoute[1]||null,date,type:body.type,description,data});
         json(res,manualRoute[1]?200:201,{meal,state:store.state()});
@@ -434,6 +516,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
           if (prior.hash!==requestHash) return json(res,409,{error:'请求 ID 已用于另一条消息。'});
           return json(res,200,{...prior.result,state:store.state(),replayed:true});
         }
+        if (accounts && !accounts.reserveModelCall(account.id,dailyModelLimit,globalModelLimit)) return json(res,429,{error:'今天的 AI 使用次数已达上限，请明天再试。'});
         const state=store.state();
         const clarification=store.clarification();
         abort = new AbortController();
@@ -517,14 +600,14 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
 
     const files = {'/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/nutrition.js': ['nutrition.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css']};
     const file = files[req.url];
-    if (req.method !== 'GET' || !file) { res.writeHead(404); res.end('Not found'); return; }
+    if (!['GET','HEAD'].includes(req.method) || !file) { res.writeHead(404); res.end('Not found'); return; }
     try {
       const content = await fs.readFile(path.join(ROOT, file[0]));
       res.writeHead(200, {'Content-Type': `${file[1]}; charset=utf-8`, 'Cache-Control': 'no-store'});
-      res.end(content);
+      res.end(req.method==='HEAD'?undefined:content);
     } catch { res.writeHead(500); res.end('Could not load file'); }
   });
-  server.on('close',()=>store.close());
+  server.on('close',()=>{legacyStore?.close();for (const store of stores.values()) store.close();accounts?.close();});
   return server;
 }
 

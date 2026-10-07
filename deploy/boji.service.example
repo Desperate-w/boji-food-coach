@@ -1,0 +1,20 @@
+[Unit]
+Description=Boji food coach
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=boji
+Group=boji
+WorkingDirectory=/opt/boji
+EnvironmentFile=/etc/boji.env
+ExecStart=/usr/bin/node /opt/boji/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/opt/boji/data
+
+[Install]
+WantedBy=multi-user.target

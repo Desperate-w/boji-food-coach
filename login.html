@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f6f7f4" />
+  <title>登录 · 薄肌饮食教练</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/login.js" defer></script>
+</head>
+<body class="auth-body">
+  <main class="auth-layout">
+    <section class="auth-story" aria-label="薄肌饮食教练">
+      <div class="auth-brand"><span class="auth-brand-mark">✦</span><span>薄肌 <small>YOUR FOOD COACH</small></span></div>
+      <div class="auth-story-main"><span class="auth-overline">给自己的一份饮食记录</span><h1>吃过的每一顿，<br>都只属于你。</h1><p>记录、回顾、调整下一顿。你和朋友各有自己的计划与历史。</p></div>
+      <div class="auth-story-footer"><span>今天吃了什么？</span><span>从这一句开始。</span></div>
+    </section>
+    <section class="auth-panel">
+      <div class="auth-card">
+        <span class="eyebrow">WELCOME / 欢迎使用</span>
+        <h2 id="auth-title">回到你的饮食计划</h2>
+        <p id="auth-description">登录后继续记录今天吃了什么。</p>
+        <form id="auth-form">
+          <label for="auth-username">用户名</label>
+          <input id="auth-username" name="username" type="text" required minlength="3" maxlength="24" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="3–24 位字母、数字或下划线" />
+          <label for="auth-password">密码</label>
+          <input id="auth-password" name="password" type="password" required minlength="12" maxlength="128" autocomplete="current-password" placeholder="至少 12 个字符" />
+          <div id="invite-field" hidden><label for="auth-invite">一次性邀请码</label><input id="auth-invite" name="inviteCode" type="text" maxlength="100" autocomplete="off" placeholder="填写收到的邀请码" /></div>
+          <p id="auth-error" class="auth-error" role="alert" hidden></p>
+          <button id="auth-submit" class="auth-submit" type="submit">登录</button>
+        </form>
+        <p class="auth-switch"><span id="auth-switch-copy">第一次使用？</span> <button id="auth-switch" type="button">用邀请码创建账号</button></p>
+      </div>
+      <p class="auth-privacy">身体资料、餐食和对话分别保存在你的账号下。</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -14,6 +14,47 @@
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
 
+.auth-body { min-height: 100dvh; }
+.boot-screen { min-height: 100dvh; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #68776c; font-size: 14px; }
+.boot-mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: var(--accent); color: #fff; font-size: 24px; }
+.auth-layout { min-height: 100dvh; display: grid; grid-template-columns: minmax(360px, 48%) minmax(0, 1fr); }
+.auth-story { color: #f6faf6; background: #255541; padding: clamp(28px, 4vw, 64px); display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; position: relative; }
+.auth-story::after { content: ''; width: 66vw; height: 66vw; max-width: 760px; max-height: 760px; border: 1px solid rgba(246,250,246,.12); border-radius: 50%; position: absolute; right: -36%; bottom: -42%; box-shadow: 0 0 0 60px rgba(246,250,246,.035), 0 0 0 125px rgba(246,250,246,.025); pointer-events: none; }
+.auth-brand { position: relative; z-index: 1; display: flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 750; letter-spacing: -.05em; }
+.auth-brand-mark { display: grid; place-items: center; width: 40px; height: 40px; background: #f6faf6; color: #255541; border-radius: 12px; transform: rotate(-8deg); }
+.auth-brand small { display: block; font-size: 10px; line-height: 1.4; letter-spacing: .14em; font-weight: 650; opacity: .68; }
+.auth-story-main { position: relative; z-index: 1; margin: 7vh 0; }
+.auth-overline { color: #a8d7bd; font-size: 12px; letter-spacing: .18em; font-weight: 700; }
+.auth-story h1 { font-size: clamp(43px, 4.4vw, 72px); letter-spacing: -.075em; line-height: 1.16; margin: 26px 0; font-weight: 700; }
+.auth-story p { color: #d0e3d4; line-height: 1.8; max-width: 390px; font-size: 16px; }
+.auth-story-footer { position: relative; z-index: 1; border-top: 1px solid rgba(255,255,255,.22); padding-top: 22px; display: flex; justify-content: space-between; gap: 20px; font-size: 13px; color: #b7d8c1; }
+.auth-panel { display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 48px 28px; }
+.auth-card { width: min(100%, 420px); }
+.auth-card h2 { font-size: clamp(27px, 3vw, 36px); letter-spacing: -.055em; margin: 18px 0 10px; }
+.auth-card > p { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0 0 34px; }
+.auth-card form { display: grid; }
+.auth-card label { font-size: 13px; font-weight: 650; margin: 0 0 8px; }
+.auth-card input { width: 100%; height: 51px; margin: 0 0 23px; padding: 0 15px; border: 1px solid #dce4dc; border-radius: 12px; background: #fff; color: var(--ink); outline: none; }
+.auth-card input:focus { border-color: #6ba686; box-shadow: 0 0 0 3px rgba(107,166,134,.15); }
+.auth-card input::placeholder { color: #a0aaa2; }
+#invite-field { display: grid; }
+#invite-field[hidden], .auth-error[hidden] { display: none; }
+.auth-error { color: #ad4c39; background: #fff2ed; padding: 11px 13px; border-radius: 10px; font-size: 13px; line-height: 1.5; margin: -4px 0 17px; }
+.auth-submit { border: 0; border-radius: 12px; height: 52px; background: var(--accent); color: #fff; font-weight: 700; margin-top: 5px; }
+.auth-submit:hover { background: var(--accent-hover); }
+.auth-switch { margin: 22px 0 0 !important; font-size: 13px; }
+.auth-switch button { border: 0; background: none; color: var(--accent); font-weight: 700; padding: 0; }
+.auth-privacy { margin: 45px 0 0; max-width: 420px; color: #8c988f; font-size: 12px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .auth-layout { display: block; }
+  .auth-story { min-height: 240px; padding: 24px; }
+  .auth-story-main { margin: 26px 0 0; }
+  .auth-story h1 { font-size: 36px; margin: 13px 0 0; }
+  .auth-story p, .auth-story-footer { display: none; }
+  .auth-panel { padding: 45px 24px; }
+  .auth-privacy { margin-top: 28px; }
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
 body { color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }

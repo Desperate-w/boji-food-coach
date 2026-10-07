@@ -29,6 +29,16 @@
   const sampleTexts = new Set(['中午吃了一份鸡腿饭，加一个蛋，米饭剩了一点。','晚上可以吃火锅吗？','可以。按今天的进度，火锅优先选牛肉、虾、鱼和蔬菜；蘸料清淡一点，主食按食欲吃就好。']);
   const withoutSamples = records => records.filter(record => !sampleIds.has(record.id) && !sampleIds.has(record.receipt?.id) && !sampleTexts.has(record.text));
   const nutrition = window.BojiNutrition;
+  let csrfToken='';
+  function apiFetch(url,options={}) {
+    const method=(options.method||'GET').toUpperCase();
+    const headers={...(options.headers||{})};
+    if (!['GET','HEAD'].includes(method) && csrfToken) headers['X-CSRF-Token']=csrfToken;
+    return fetch(url,{...options,headers}).then(response=>{
+      if (response.status===401 && /^https?:$/.test(window.location?.protocol||'')) window.location.replace('/login');
+      return response;
+    });
+  }
   const emptyDraft = () => ({gender:'',age:'',height:'',weight:'',goal:'',frequency:'',training:'',activity:''});
   const profileDraft = profile => profile ? {
     gender:profile.gender||'',age:profile.age||'',height:profile.height||'',weight:profile.weight||'',
@@ -49,7 +59,7 @@
 
   let state;
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const saved = /^https?:$/.test(window.location?.protocol||'')?null:JSON.parse(localStorage.getItem(STORAGE_KEY));
     state = saved && Array.isArray(saved.meals) && Array.isArray(saved.messages)
       ? {...seedState(), ...saved, attachment:null, currentFeedback:null, pending:null, requestError:null, connection:{mode:'checking', model:''}, modal:null, menuOpen:false}
       : seedState();
@@ -129,7 +139,7 @@
       <div class="side-divider"></div><div class="side-label">最近记录</div>
       ${state.meals.length||state.messages.length?`<button class="recent-day" data-action="history-day" data-day="today">今天 · ${fmt(totals().calories)} kcal</button>`:'<div class="recent-day recent-empty">还没有记录</div>'}
       ${recent.map(day=>`<button class="recent-day" data-action="history-day" data-day="${day}">${day.slice(5).replace('-','月')}日 · ${fmt(state.archives[day].calories)} kcal</button>`).join('')}
-      <div class="sidebar-bottom"><button class="side-action" data-action="onboarding">${icon('spark')} 调整我的计划</button><button class="side-action" data-action="export-backup">${icon('calendar')} 导出我的记录</button>${state.connection.mode==='live'?'<button class="side-action" data-action="import-backup">导入旧版记录</button>':`<button class="side-action" data-action="reset">${icon('reset')} 重新体验建档</button>`}<div class="demo-note">${state.connection.mode==='live'?'资料和记录保存在本机服务；文字由 DeepSeek V4 Pro 处理，照片先由 Flash 识别':state.connection.mode==='unavailable'?'本地服务不可用，请刷新页面重试':'对话与图片识别为本地模拟'}</div></div>
+      <div class="sidebar-bottom"><button class="side-action" data-action="onboarding">${icon('spark')} 调整我的计划</button><button class="side-action" data-action="export-backup">${icon('calendar')} 导出我的记录</button>${state.connection.mode==='live'?'<button class="side-action" data-action="import-backup">导入旧版记录</button><button class="side-action" data-action="logout">退出登录</button>':`<button class="side-action" data-action="reset">${icon('reset')} 重新体验建档</button>`}<div class="demo-note">${state.connection.mode==='live'?'资料和记录仅保存在你的账号中；文字由 DeepSeek V4 Pro 处理，照片先由 Flash 识别':state.connection.mode==='unavailable'?'服务不可用，请刷新页面重试':'对话与图片识别为本地模拟'}</div></div>
     </aside>`;
   }
   function navButton(view, glyph, text) { return `<button class="nav-button ${state.view===view?'active':''}" data-action="nav" data-view="${view}">${icon(glyph)}${text}</button>`; }
@@ -321,6 +331,10 @@
     return renderSetup(true);
   }
   function render() {
+    if (state.connection.mode==='checking' && /^https?:$/.test(window.location?.protocol||'')) {
+      app.innerHTML='<div class="boot-screen" role="status"><span class="boot-mark">✦</span><span>正在读取你的记录…</span></div>';
+      return;
+    }
     app.innerHTML=state.onboardingComplete
       ? `<div class="app-shell">${renderSidebar()}<div class="main">${state.view==='chat'?renderChat():state.view==='history'?renderHistory():renderProfile()}</div></div>${renderMobileNav()}${renderModal()}<div class="toast" id="toast" role="status"></div>`
       : renderSetup()+(state.modal==='import'?renderModal():'');
@@ -347,7 +361,7 @@
       if (state.connection.mode==='unavailable'||(state.connection.mode==='checking'&&/^https?:$/.test(window.location?.protocol||''))) throw new Error('本地服务尚未就绪，无法导出服务端记录。');
       let data=browserBackup();
       if (state.connection.mode==='live') {
-        const response=await fetch('/api/export',{cache:'no-store'});
+        const response=await apiFetch('/api/export',{cache:'no-store'});
         if (!response.ok) throw new Error('导出失败');
         data=await response.json();
       }
@@ -402,7 +416,7 @@
     state.mealSaving=true;state.mealError='';render();
     try {
       if (state.connection.mode==='live') {
-        const response=await fetch(d.id?`/api/meals/${encodeURIComponent(d.id)}`:'/api/meals',{
+        const response=await apiFetch(d.id?`/api/meals/${encodeURIComponent(d.id)}`:'/api/meals',{
           method:d.id?'PUT':'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({date:d.date==='today'?state.activeDate:d.date,type,description}),
         });
@@ -451,7 +465,7 @@
     try {
       if (state.connection.mode==='live') {
         const endpoint=target.kind==='meal'?`/api/meals/${encodeURIComponent(target.id)}`:`/api/history/${encodeURIComponent(target.date)}`;
-        const response=await fetch(endpoint,{method:'DELETE'});
+        const response=await apiFetch(endpoint,{method:'DELETE'});
         const isJson=(response.headers.get('content-type')||'').includes('application/json');
         const payload=isJson?await response.json().catch(()=>null):null;
         if (!response.ok) {
@@ -529,7 +543,7 @@
     state.serverToday=snapshot.today;
   }
   async function refreshLiveState() {
-    const response=await fetch('/api/state',{cache:'no-store'});
+    const response=await apiFetch('/api/state',{cache:'no-store'});
     if (!response.ok) throw new Error('无法读取服务端记录');
     applyServerState(await response.json());
     render();
@@ -553,7 +567,7 @@
     thinkingTimer=setInterval(()=>{const el=document.getElementById('thinking-seconds');if(el&&state.pending)el.textContent=`${Math.floor((Date.now()-state.pending.startedAt)/1000)} 秒`;},1000);
     const controller=new AbortController();liveController=controller;
     try {
-      const response=await fetch('/api/chat',{
+      const response=await apiFetch('/api/chat',{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({requestId,text,image:attachment?.url||null,targetMealId:state.correctionTarget||null,source:options.source||(attachment?'photo':'text')}),
         signal:controller.signal,
@@ -580,7 +594,7 @@
       finishLiveTurn(result);
     } catch (error) {
       try {
-        const reconcile=await fetch(`/api/turn/${encodeURIComponent(requestId)}`,{cache:'no-store'});
+        const reconcile=await apiFetch(`/api/turn/${encodeURIComponent(requestId)}`,{cache:'no-store'});
         if (reconcile.ok) {finishLiveTurn(await reconcile.json());return;}
       } catch {}
       clearInterval(thinkingTimer);
@@ -650,7 +664,7 @@
     const wasComplete=state.onboardingComplete;
     if (state.connection.mode==='live') {
       try {
-        const response=await fetch('/api/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:d,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})});
+        const response=await apiFetch('/api/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:d,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})});
         const payload=await response.json();
         if (!response.ok) throw new Error(payload.error||'保存资料失败');
         applyServerState(payload.state);
@@ -701,26 +715,30 @@
     else if (action==='correct-meal') {state.correctionTarget=button.dataset.meal;state.draft=state.connection.mode==='live'?'请把这顿改为：':'米饭其实只吃了一半';state.view='chat';render();requestAnimationFrame(()=>document.getElementById('message-input')?.focus());}
     else if (action==='onboarding') {state.modal='onboarding';state.onboardStep=0;state.onboardingDraft=profileDraft(state.profile);render();}
     else if (action==='export-backup') exportBackup();
+    else if (action==='logout') {
+      await apiFetch('/api/auth/logout',{method:'POST'});
+      window.location.assign('/login');
+    }
     else if (action==='import-backup') backupInput?.click();
     else if (action==='memory-open') {const memory=state.memories.find(item=>item.id===button.dataset.id);state.memoryEditId=memory?.id||null;state.memoryDraft=memory?.text||'';state.modal='memory';render();}
     else if (action==='memory-save') {
       const text=state.memoryDraft.trim();if (text.length<2) return toast('习惯内容至少写 2 个字');
       try {
         const endpoint=state.memoryEditId?`/api/memories/${state.memoryEditId}`:'/api/memories';
-        const response=await fetch(endpoint,{method:state.memoryEditId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+        const response=await apiFetch(endpoint,{method:state.memoryEditId?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
         const payload=await response.json();if (!response.ok) throw new Error(payload.error||'保存失败');
         applyServerState(payload.state);state.modal=null;state.memoryDraft='';state.memoryEditId=null;render();toast('习惯已保存');
       } catch(error) {toast(error.message||'保存失败');}
     }
     else if (action==='memory-delete') {
       if (!window.confirm('删除这条长期习惯？')) return;
-      try {const response=await fetch(`/api/memories/${button.dataset.id}`,{method:'DELETE'});const payload=await response.json();if (!response.ok) throw new Error(payload.error||'删除失败');applyServerState(payload.state);render();toast('习惯已删除');}
+      try {const response=await apiFetch(`/api/memories/${button.dataset.id}`,{method:'DELETE'});const payload=await response.json();if (!response.ok) throw new Error(payload.error||'删除失败');applyServerState(payload.state);render();toast('习惯已删除');}
       catch(error) {toast(error.message||'删除失败');}
     }
     else if (action==='delete-photo') {
       if (!window.confirm('删除这张照片？文字与餐食记录会保留。')) return;
       try {
-        const response=await fetch(`/api/media/${encodeURIComponent(button.dataset.id)}`,{method:'DELETE'});
+        const response=await apiFetch(`/api/media/${encodeURIComponent(button.dataset.id)}`,{method:'DELETE'});
         const payload=await response.json();
         if (!response.ok) throw new Error(payload.error||'删除失败');
         applyServerState(payload.state);state.currentFeedback=null;render();toast('照片已删除');
@@ -730,7 +748,7 @@
       const backup=state.importBackup?.data,mode=button.dataset.mode;
       if (!backup) return;
       try {
-        const response=await fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({backup,mode})});
+        const response=await apiFetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({backup,mode})});
         const payload=await response.json();
         if (!response.ok) throw new Error(payload.error||'导入失败');
         applyServerState(payload.state);state.importBackup=null;state.modal=null;render();toast(`已导入 ${payload.importedMeals} 餐、${payload.importedMessages} 条交流`);
@@ -875,11 +893,15 @@
       state.connection={mode:'demo',model:'',provider:''};render();return;
     }
     try {
-      const response=await fetch('/api/health',{cache:'no-store'});
+      const auth=await fetch('/api/auth/session',{cache:'no-store'});
+      if (auth.status===401) {window.location.replace('/login');return;}
+      if (!auth.ok) throw new Error('无法检查登录状态');
+      csrfToken=(await auth.json()).csrf||'';
+      const response=await apiFetch('/api/health',{cache:'no-store'});
       if (!response.ok) throw new Error('服务未连接');
       const health=await response.json();
-      state.connection=health.configured?{mode:'live',model:health.model||'LLM',visionModel:health.visionModel,provider:health.provider||'DeepSeek'}:{mode:'demo',model:'',provider:''};
-      if (health.configured) await refreshLiveState();
+      state.connection={mode:'live',model:health.model||'LLM',visionModel:health.visionModel,provider:health.provider||'DeepSeek',configured:health.configured};
+      await refreshLiveState();
     } catch {state.connection={mode:'unavailable',model:'',provider:''};}
     render();
   }

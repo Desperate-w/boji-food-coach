@@ -28,6 +28,7 @@ function openToday(options={}) {
   if (options.live) {
     const serverState={profile:saved.profile,activeDate:new Date().toLocaleDateString('sv-SE'),meals:[],messages:[{role:'user',text:'测试记录'}],archives:{},memories:[],today:{calories:0,protein:0,carbs:0,fat:0,fiber:0,status:'待记录',advice:'今天还没有饮食记录。'}};
     context.fetch=async (url,request) => {
+      if (url==='/api/auth/session') return {ok:true,json:async()=>({authenticated:true,csrf:'test-csrf'})};
       if (url==='/api/health') return {ok:true,json:async()=>({configured:true,model:'test'})};
       if (url==='/api/state') return {ok:true,json:async()=>serverState};
       if (request?.method==='DELETE') return options.live.deleteResponse;
