@@ -452,8 +452,15 @@
       if (state.connection.mode==='live') {
         const endpoint=target.kind==='meal'?`/api/meals/${encodeURIComponent(target.id)}`:`/api/history/${encodeURIComponent(target.date)}`;
         const response=await fetch(endpoint,{method:'DELETE'});
-        const payload=await response.json();
-        if (!response.ok) throw new Error(payload.error||'删除失败，请重试。');
+        const isJson=(response.headers.get('content-type')||'').includes('application/json');
+        const payload=isJson?await response.json().catch(()=>null):null;
+        if (!response.ok) {
+          const message=response.status===404&&!payload
+            ?'本地服务尚未加载删除功能。请重新启动 npm start，刷新页面后重试。'
+            :'删除失败，请重试。';
+          throw new Error(payload?.error||message);
+        }
+        if (!payload?.state) throw new Error('服务返回内容异常，请重新启动本地服务后重试。');
         applyServerState(payload.state);
         if (target.kind==='day'||(target.day!=='today'&&!state.archives[target.day])) state.historyDetail=null;
       } else deleteDemoRecord(target);

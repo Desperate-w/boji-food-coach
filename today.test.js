@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function openToday() {
+function openToday(options={}) {
   const handlers={};
   const app={innerHTML:''};
   const descriptionField={value:'',focus(){}};
@@ -15,7 +15,7 @@ function openToday() {
     addEventListener(name,handler) {handlers[name]=handler;},
   };
   const context={
-    window:{location:{protocol:'file:',search:''},addEventListener(){},scrollTo(){}},document,URLSearchParams,
+    window:{location:{protocol:options.live?'http:':'file:',search:''},addEventListener(){},scrollTo(){}},document,URLSearchParams,
     localStorage:{getItem(){return storage.value;},setItem(_key,value){storage.value=value;}},
     requestAnimationFrame(callback){callback();},setTimeout(){return 1;},clearTimeout(){},
     setInterval(){return 1;},clearInterval(){},console,
@@ -25,6 +25,15 @@ function openToday() {
   const saved=JSON.parse(storage.value);
   saved.profile={...profile,...context.window.BojiNutrition.calculate(profile)};
   storage.value=JSON.stringify(saved);
+  if (options.live) {
+    const serverState={profile:saved.profile,activeDate:new Date().toLocaleDateString('sv-SE'),meals:[],messages:[{role:'user',text:'测试记录'}],archives:{},memories:[],today:{calories:0,protein:0,carbs:0,fat:0,fiber:0,status:'待记录',advice:'今天还没有饮食记录。'}};
+    context.fetch=async (url,request) => {
+      if (url==='/api/health') return {ok:true,json:async()=>({configured:true,model:'test'})};
+      if (url==='/api/state') return {ok:true,json:async()=>serverState};
+      if (request?.method==='DELETE') return options.live.deleteResponse;
+      throw new Error(`Unexpected request: ${url}`);
+    };
+  }
   vm.runInContext(fs.readFileSync(`${__dirname}/app.js`,'utf8'),context);
   const click=(action,textOrData)=>handlers.click({target:{closest(){return {dataset:{action,...(typeof textOrData==='string'?{text:textOrData}:textOrData||{})}};}}});
   const proteinFill=()=>Number(app.innerHTML.match(/class="protein-fill" style="width:(\d+)%"/)?.[1]);
@@ -115,6 +124,17 @@ test('History confirms meal and day deletion before updating preview nutrition',
   const saved=JSON.parse(today.storage.value);
   assert.equal(saved.meals.length,0);
   assert.equal(saved.messages.length,0);
+});
+
+test('History deletion explains when a running server lacks the deletion route', async () => {
+  const today=openToday({live:{deleteResponse:{ok:false,status:404,headers:{get:()=>null}}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  today.click('history-day',{day:'today'});
+  today.click('history-delete-day',{day:'today'});
+  await today.click('delete-confirm');
+  assert.match(today.app.innerHTML,/本地服务尚未加载删除功能/);
+  assert.match(today.app.innerHTML,/重新启动 npm start/);
+  assert.match(today.app.innerHTML,/删除当天所有记录？/);
 });
 
 test('Profile shows resting, activity and maintenance energy without double counting training', () => {
