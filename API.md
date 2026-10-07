@@ -54,3 +54,11 @@ History 手动餐食接口只接受过去一年内的有效日期。用户选定
 同账号的写操作同时仅处理一项，冲突返回 `409 {code:"ACCOUNT_BUSY",error}`，完成后可重试；不同账号并行。全站模型槽位用尽返回 `503 {code:"MODEL_BUSY",error}`，不扣每日配额。账号配额及全站配额按 UTC 日计数，已发起但失败的调用仍计数。`MODEL_CONCURRENCY`、`STORE_CACHE_LIMIT` 和费用限额可配置，均不是账号人数限制。
 
 前端发送 `X-History-Date: YYYY-MM-DD` 可让返回 state 保留正在编辑的旧日期；完整导出不受分页影响。当前为单实例服务，同账号写锁及全站并发控制在进程内，多实例需迁移共享任务和数据库。
+
+## 云部署补充
+
+Vercel 入口复用相同接口，`DATABASE_URL` 启用 PostgreSQL，照片由私有 Blob 保存，浏览器继续访问受账号保护的 `/api/media/:id`。所有写请求仍要求 Cookie 会话与 `X-CSRF-Token`。云模式的写入租约、模型并发、限流与配额在数据库共享；同账号繁忙返回 `409 ACCOUNT_BUSY`，全站模型忙返回 `503 MODEL_BUSY`。
+
+`GET /api/export` 流式返回完整个人 JSON 备份，照片内嵌。Vercel `POST /api/import` 的请求体最多 4,000,000 字节，本地模式仍为 20,000,000 字节。
+
+`GET /api/maintenance` 仅云模式提供，要求 `Authorization: Bearer <CRON_SECRET>`，由每日 Vercel Cron 调用；不使用用户会话。不传维护密钥返回 401。`/healthz` 仅确认入口存活；登录后的 `/api/health` 在云模式还验证数据库结构版本。

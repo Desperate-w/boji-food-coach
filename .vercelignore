@@ -1,0 +1,19 @@
+# Local credentials, data, backups and generated files must never be uploaded.
+.git/
+.vercel/
+node_modules/
+public/
+data/
+backups/
+api-key*.json
+.env
+.env.*
+*.test.js
+*.md
+deploy/
+Dockerfile
+compose.yaml
+.dockerignore
+.DS_Store
+scripts/database.js
+scripts/smoke-vercel.js

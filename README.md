@@ -64,3 +64,7 @@ npm start
 ## Git 记录
 
 项目已用 Git 保存版本。以后的代码修改会提交到本地仓库；`api-key.local.json` 始终留在本机，不纳入提交。新环境可复制 `api-key.example.json` 为 `api-key.local.json` 后再填写自己的 Key。
+
+## Vercel 云版本
+
+支持 PostgreSQL + 私有 Vercel Blob，多实例共享认证、额度和写入租约；本机模式仍用 SQLite。配置与重新部署见 [VERCEL部署.md](VERCEL部署.md)。部署前执行 `npm test`、`npm run test:cloud` 和 `npm run db:migrate`。

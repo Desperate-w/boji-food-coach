@@ -5,3 +5,5 @@ node_modules/
 data/
 backups/
 .DS_Store
+.vercel/
+public/

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci --omit=dev",
+  "buildCommand": "npm run build:vercel",
+  "outputDirectory": "public",
+  "regions": ["sin1"],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300,
+      "includeFiles": "{index.html,login.html,app.js,login.js,nutrition.js,styles.css,db/schema.sql}"
+    }
+  },
+  "rewrites": [
+    {"source": "/(.*)", "destination": "/api/index"}
+  ],
+  "crons": [
+    {"path": "/api/maintenance", "schedule": "0 3 * * *"}
+  ]
+}

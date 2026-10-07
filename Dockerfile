@@ -1,6 +1,8 @@
 FROM node:24-bookworm-slim AS checked
 WORKDIR /app
-COPY package.json *.js *.html *.css ./
+COPY package.json package-lock.json *.js *.html *.css ./
+COPY db ./db
+RUN npm ci --omit=dev
 RUN npm test
 
 FROM node:24-bookworm-slim

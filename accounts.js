@@ -151,4 +151,4 @@ class Accounts {
   }
 }
 
-module.exports={Accounts};
+module.exports={Accounts,digest,passwordHash,validUsername,validPassword};

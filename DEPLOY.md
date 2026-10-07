@@ -1,6 +1,6 @@
 # 薄肌多人版部署
 
-同一份代码支持用户自行注册，各自保存身体资料、饮食和照片。没有写死的用户人数上限。5 人只是初始使用规模；新用户增加时无需修改代码或逐个创建账号。当前交付是单实例部署版本，外网部署尚未执行。
+同一份代码支持用户自行注册，各自保存身体资料、饮食和照片。没有写死的用户人数上限。5 人只是初始使用规模；新用户增加时无需修改代码或逐个创建账号。支持两种部署方式：本机磁盘的单实例服务器版，以及 PostgreSQL + 私有 Blob 的 Vercel 版。当前选择 Vercel 试用，具体配置和验收记录见 [VERCEL部署.md](VERCEL部署.md)。下文的磁盘、进程锁和 Docker 说明适用于 SQLite 服务器模式。
 
 ## 你现在需要准备什么
 
@@ -74,7 +74,7 @@ docker compose start app
 
 ## 不使用 Docker 的方式
 
-可使用 Node.js 24 或更新版本，执行 `npm test` 后，通过 `deploy/boji.service.example` 和 `deploy/Caddyfile.example` 部署。Node 使用内置 SQLite，部署前必须在所选运行时通过测试。[Node SQLite 文档](https://nodejs.org/api/sqlite.html)
+可使用 Node.js 24，先执行 `npm ci --omit=dev`、`npm test` 后，通过 `deploy/boji.service.example` 和 `deploy/Caddyfile.example` 部署。Node 使用内置 SQLite，部署前必须在所选运行时通过测试。[Node SQLite 文档](https://nodejs.org/api/sqlite.html)
 
 systemd 模板将数据放到 `/var/lib/boji`，代码放在 `/opt/boji`。在受限的 `/etc/boji.env` 配置密钥、`PUBLIC_ORIGIN=https://你的域名`、`TRUSTED_PROXY_IPS=127.0.0.1,::1,::ffff:127.0.0.1` 和注册策略。Node 监听 `127.0.0.1:3000`，只通过 Caddy 对外提供服务。管理员命令也要带相同的 `DATA_DIR=/var/lib/boji`；根据服务器实际 Node 安装位置调整 `ExecStart`。
 

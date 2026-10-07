@@ -1,13 +1,27 @@
 {
   "name": "boji-food-coach",
   "private": true,
-  "version": "0.3.0",
-  "engines": {"node": ">=24"},
+  "version": "0.4.0",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "start": "node server.js",
     "invite:owner": "node admin.js owner",
     "invite:friend": "node admin.js member",
     "invite:member": "node admin.js member",
-    "test": "node --test nutrition.test.js voice.test.js today.test.js backend.test.js accounts.test.js multiuser.test.js"
+    "test": "node --test nutrition.test.js voice.test.js today.test.js backend.test.js accounts.test.js multiuser.test.js",
+    "build:vercel": "node scripts/build-vercel.js",
+    "db:migrate": "node --env-file-if-exists=.env.vercel.local scripts/database.js migrate",
+    "db:cleanup": "node --env-file-if-exists=.env.vercel.local scripts/database.js cleanup",
+    "test:cloud": "node --test cloud.test.js"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.1",
+    "@vercel/functions": "^3.9.11",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17"
   }
 }

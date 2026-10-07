@@ -2,11 +2,19 @@ const http = require('node:http');
 const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const {Store} = require('./store.js');
 const {Accounts} = require('./accounts.js');
 const {positiveInteger, clientAddress, Gate, UserStores} = require('./runtime.js');
 
 const ROOT = __dirname;
+function publicError(error,fallback) {
+  if (error.code || error.name==='TypeError') {
+    console.error('操作失败：'+(error.code||error.name));
+    return fallback;
+  }
+  return error.message||fallback;
+}
 function readLocalConfig() {
   let source;
   try { source = fsSync.readFileSync(path.join(ROOT, 'api-key.local.json'), 'utf8'); }
@@ -24,7 +32,7 @@ function readLocalConfig() {
   }
   return config;
 }
-const localConfig = readLocalConfig();
+const localConfig = process.env.VERCEL ? {} : readLocalConfig();
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3000);
 const MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro';
@@ -311,8 +319,8 @@ function cookieValue(req,name) {
   return match?match.slice(name.length+1):null;
 }
 
-function sessionCookie(req,token,maxAge,trustedProxies,publicOrigin) {
-  const secure=publicOrigin?.startsWith('https://') || req.socket.encrypted || (trustedProxies.includes(req.socket.remoteAddress) && req.headers['x-forwarded-proto']==='https');
+function sessionCookie(req,token,maxAge,trustedProxies,publicOrigin,platformVercel=false) {
+  const secure=platformVercel || publicOrigin?.startsWith('https://') || req.socket.encrypted || (trustedProxies.includes(req.socket.remoteAddress) && req.headers['x-forwarded-proto']==='https');
   return `boji_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
 }
 
@@ -321,7 +329,8 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
   publicOrigin = process.env.PUBLIC_ORIGIN || '', trustedProxies = (process.env.TRUSTED_PROXY_IPS || '').split(',').filter(Boolean),
   dailyModelLimit = process.env.DAILY_MODEL_LIMIT, globalModelLimit = process.env.GLOBAL_DAILY_MODEL_LIMIT,
   modelConcurrency = process.env.MODEL_CONCURRENCY, passwordConcurrency = process.env.PASSWORD_CONCURRENCY,
-  storeLimit = process.env.STORE_CACHE_LIMIT, storeIdleMs = process.env.STORE_IDLE_MS} = {}) {
+  storeLimit = process.env.STORE_CACHE_LIMIT, storeIdleMs = process.env.STORE_IDLE_MS,
+  cloudDatabase, mediaStorage, platformVercel=false} = {}) {
   dailyModelLimit=positiveInteger(dailyModelLimit,30,'DAILY_MODEL_LIMIT');
   globalModelLimit=positiveInteger(globalModelLimit,1000,'GLOBAL_DAILY_MODEL_LIMIT');
   if (!['open','invite','closed'].includes(registration)) throw new Error('REGISTRATION_MODE 只能是 open、invite 或 closed。');
@@ -332,15 +341,17 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
   passwordConcurrency=positiveInteger(passwordConcurrency,4,'PASSWORD_CONCURRENCY');
   modelConcurrency=positiveInteger(modelConcurrency,10,'MODEL_CONCURRENCY');
   dataDir=dbPath?path.dirname(dbPath):path.resolve(dataDir);
-  const accounts=auth?new Accounts(path.join(dataDir,'accounts.sqlite')):null;
-  const stores=new UserStores(dataDir,{limit:storeLimit,idleMs:storeIdleMs});
+  const cloud=(cloudDatabase || (!dbPath && process.env.DATABASE_URL)) ? require('./cloud-runtime.js').cloudRuntime({database:cloudDatabase,media:mediaStorage}) : null;
+  if (cloud && !auth) throw new Error('云存储必须启用账号认证。');
+  const accounts=auth?(cloud?.accounts||new Accounts(path.join(dataDir,'accounts.sqlite'))):null;
+  const stores=cloud?.stores||new UserStores(dataDir,{limit:storeLimit,idleMs:storeIdleMs});
   const legacyStore=auth?null:new Store(dbPath||path.join(dataDir,'boji.sqlite'));
   const passwords=new Gate(passwordConcurrency);
   const models=new Gate(modelConcurrency);
   const writing=new Set();
-  const cleanup=setInterval(()=>{try {stores.sweep();accounts?.cleanup();} catch {console.error('定期数据维护失败，请检查磁盘和数据库状态。');}},60_000);
-  cleanup.unref();
-  const server=http.createServer(async (req, res) => {
+  const cleanup=platformVercel?null:setInterval(async()=>{try {stores.sweep();await accounts?.cleanup();} catch {console.error('定期数据维护失败。');}},60_000);
+  cleanup?.unref();
+  const handler=async (req, res) => {
     let releaseStore,releaseWrite,releaseModel;
     try {
     res.setHeader('X-Content-Type-Options','nosniff');
@@ -350,19 +361,27 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
     const url=new URL(req.url,'http://localhost');
     req.url=url.pathname;
     if (req.url==='/healthz' && ['GET','HEAD'].includes(req.method)) return json(res,200,{ok:true});
+    if (cloud && req.url==='/api/maintenance' && req.method==='GET') {
+      const expected=process.env.CRON_SECRET;
+      const supplied=req.headers.authorization;
+      const left=Buffer.from(supplied||''),right=Buffer.from('Bearer '+(expected||''));
+      if (!expected || left.length!==right.length || !crypto.timingSafeEqual(left,right)) return json(res,401,{error:'维护请求未授权。'});
+      const result=await require('./cloud-maintenance.js').maintainCloud(cloud.database,cloud.media);
+      return json(res,200,{ok:true,...result});
+    }
     if (!['GET','HEAD'].includes(req.method)) {
       const origin=req.headers.origin;
-      if (req.headers['sec-fetch-site']==='cross-site' || (origin && origin!==(publicOrigin||`${req.socket.encrypted||(trustedProxies.includes(req.socket.remoteAddress)&&req.headers['x-forwarded-proto']==='https')?'https':'http'}://${req.headers.host}`))) return json(res,403,{error:'请求来源无效。'});
+      if (req.headers['sec-fetch-site']==='cross-site' || (origin && origin!==(publicOrigin||`${platformVercel||req.socket.encrypted||(trustedProxies.includes(req.socket.remoteAddress)&&req.headers['x-forwarded-proto']==='https')?'https':'http'}://${req.headers.host}`))) return json(res,403,{error:'请求来源无效。'});
     }
     const token=cookieValue(req,'boji_session');
-    const account=accounts?accounts.session(token):null;
+    const account=accounts?await accounts.session(token):null;
     if (accounts && req.url==='/api/auth/config' && req.method==='GET') return json(res,200,{registration});
     if (accounts && req.url==='/api/auth/session' && req.method==='GET') {
       return account?json(res,200,{authenticated:true,username:account.username,csrf:Accounts.csrfForToken(token)}):json(res,401,{authenticated:false});
     }
     if (accounts && ['/api/auth/login','/api/auth/register'].includes(req.url) && req.method==='POST') {
-      const key=`${req.url}:${clientAddress(req,trustedProxies)}`;
-      if (!accounts.rateAllowed(key,30,15*60_000)) {res.setHeader('Retry-After','900');return json(res,429,{error:'尝试次数过多，请稍后再试。'});}
+      const key=`${req.url}:${platformVercel?req.platformAddress||'unknown':clientAddress(req,trustedProxies)}`;
+      if (!await accounts.rateAllowed(key,30,15*60_000)) {res.setHeader('Retry-After','900');return json(res,429,{error:'尝试次数过多，请稍后再试。'});}
       const releasePassword=passwords.acquire();
       if (!releasePassword) {res.setHeader('Retry-After','1');return json(res,503,{error:'登录服务繁忙，请稍后重试。'});}
       try {
@@ -372,15 +391,15 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         if (req.url==='/api/auth/register') user=await accounts.register(body,registration);
         else {
           const userKey=`login:${String(body?.username||'').toLowerCase().slice(0,24)}`;
-          if (!accounts.rateAllowed(userKey,8,15*60_000)) {res.setHeader('Retry-After','900');return json(res,429,{error:'此账号尝试次数过多，请稍后再试。'});}
+          if (!await accounts.rateAllowed(userKey,8,15*60_000)) {res.setHeader('Retry-After','900');return json(res,429,{error:'此账号尝试次数过多，请稍后再试。'});}
           user=await accounts.verify(body?.username,body?.password);
           if (!user) return json(res,401,{error:'用户名或密码不正确。'});
-          accounts.clearRate(userKey);
+          await accounts.clearRate(userKey);
         }
-        const session=accounts.createSession(user);
-        res.setHeader('Set-Cookie',sessionCookie(req,session.token,30*24*3600,trustedProxies,publicOrigin));
+        const session=await accounts.createSession(user);
+        res.setHeader('Set-Cookie',sessionCookie(req,session.token,30*24*3600,trustedProxies,publicOrigin,platformVercel));
         return json(res,200,{authenticated:true,username:user.username,csrf:session.csrf});
-      } catch(error) {return json(res,error.status||400,{error:error.code?.startsWith('ERR_SQLITE')?'暂时无法完成登录，请稍后重试。':(error.message||'无法完成登录。')});}
+      } catch(error) {return json(res,error.status||400,{error:publicError(error,'暂时无法完成登录，请稍后重试。')});}
       finally {releasePassword();}
     }
     if (accounts && req.url==='/login' && ['GET','HEAD'].includes(req.method)) {
@@ -400,77 +419,89 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
     }
     if (accounts && !['GET','HEAD'].includes(req.method) && !accounts.validCsrf(account,req.headers['x-csrf-token'])) return json(res,403,{error:'会话校验失败，请刷新页面重试。'});
     if (accounts && req.url==='/api/auth/logout' && req.method==='POST') {
-      accounts.revokeSession(token);
-      res.setHeader('Set-Cookie',sessionCookie(req,'',0,trustedProxies,publicOrigin));
+      await accounts.revokeSession(token);
+      res.setHeader('Set-Cookie',sessionCookie(req,'',0,trustedProxies,publicOrigin,platformVercel));
       return json(res,200,{authenticated:false});
     }
-    if (accounts && req.url.startsWith('/api/') && !['GET','HEAD'].includes(req.method) && !accounts.rateAllowed(`writes:${account.id}`,120,60_000)) {
+    if (accounts && req.url.startsWith('/api/') && !['GET','HEAD'].includes(req.method) && !await accounts.rateAllowed(`writes:${account.id}`,120,60_000)) {
       res.setHeader('Retry-After','60');return json(res,429,{error:'操作过于频繁，请稍后重试。'});
     }
     if (req.method === 'GET' && req.url === '/api/health') {
+      if (cloud) await cloud.database.ready();
       json(res,200,{configured:Boolean(apiKey),model,visionModel,provider:'DeepSeek',persistent:true});
       return;
     }
     if (req.url.startsWith('/api/')) {
       if (!['GET','HEAD'].includes(req.method)) {
         const key=account?.id||'legacy';
-        if (writing.has(key)) {res.setHeader('Retry-After','1');return json(res,409,{code:'ACCOUNT_BUSY',error:'上一项操作仍在处理中，请完成后再试。'});}
-        writing.add(key);releaseWrite=()=>writing.delete(key);
+        if (cloud) releaseWrite=await accounts.acquireWrite(key);
+        else if (!writing.has(key)) {writing.add(key);releaseWrite=()=>writing.delete(key);}
+        if (!releaseWrite) {res.setHeader('Retry-After','1');return json(res,409,{code:'ACCOUNT_BUSY',error:'上一项操作仍在处理中，请完成后再试。'});}
       }
-      if (accounts) {const lease=stores.acquire(account);releaseStore=lease.release;req.userStore=lease.store;}
+      if (accounts) {const lease=stores.acquire(account);releaseStore=lease.release;req.userStore=lease.store;if (cloud) req.userStore.lease=releaseWrite;}
     }
     const store=req.userStore||legacyStore;
-    const snapshot=()=>store.state({focusDate:req.headers['x-history-date']});
-    const reserveModel=()=>{
-      releaseModel=models.acquire();
+    const snapshot=async()=>store.state({focusDate:req.headers['x-history-date']});
+    const reserveModel=async()=>{
+      releaseModel=cloud?await accounts.acquireModel(modelConcurrency):models.acquire();
       if (!releaseModel) {res.setHeader('Retry-After','3');json(res,503,{code:'MODEL_BUSY',error:'AI 服务繁忙，请稍后重试。'});return false;}
-      if (accounts && !accounts.reserveModelCall(account.id,dailyModelLimit,globalModelLimit)) {json(res,429,{error:'今天的 AI 使用次数已达上限，请明天再试。'});return false;}
+      if (accounts && !await accounts.reserveModelCall(account.id,dailyModelLimit,globalModelLimit)) {json(res,429,{error:'今天的 AI 使用次数已达上限，请明天再试。'});return false;}
       return true;
     };
     if (req.method === 'GET' && req.url === '/api/state') {
-      json(res,200,snapshot());
+      json(res,200,await snapshot());
       return;
     }
     if (req.method==='GET' && req.url==='/api/history') {
       const before=url.searchParams.get('before');
-      if (!validHistoryDate(before,store.today())) return json(res,400,{error:'历史游标无效。'});
-      return json(res,200,store.historyPage(before));
+      if (!validHistoryDate(before,await store.today())) return json(res,400,{error:'历史游标无效。'});
+      return json(res,200,await store.historyPage(before));
     }
     const historyDetailRoute=/^\/api\/history\/(\d{4}-\d{2}-\d{2})$/.exec(req.url);
     if (req.method==='GET' && historyDetailRoute) {
       const date=historyDetailRoute[1];
-      if (!validHistoryDate(date,store.today())) return json(res,400,{error:'历史日期无效。'});
-      const day=store.day(date);
+      if (!validHistoryDate(date,await store.today())) return json(res,400,{error:'历史日期无效。'});
+      const day=await store.day(date);
       return day.meals.length||day.messages.length?json(res,200,{day}):json(res,404,{error:'当天没有记录。'});
     }
     if (req.method === 'GET' && req.url === '/api/export') {
       res.setHeader('Content-Disposition','attachment; filename="boji-backup.json"');
-      json(res,200,store.exportData());
+      const output=JSON.stringify(await store.exportData());
+      res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});
+      // Streaming avoids Vercel's buffered response size ceiling for photo backups.
+      const {once}=require('node:events');
+      for (let offset=0;offset<output.length;) {
+        let end=Math.min(offset+32768,output.length);
+        if (end<output.length && /[\uD800-\uDBFF]/.test(output[end-1])) end--;
+        if (!res.write(output.slice(offset,end))) await once(res,'drain',{signal:AbortSignal.timeout(30000)});
+        offset=end;
+      }
+      res.end();
       return;
     }
     if (req.method === 'GET' && /^\/api\/media\/[a-f0-9-]{36}$/.test(req.url)) {
-      const media=store.readMedia(req.url.slice('/api/media/'.length));
+      const media=await store.readMedia(req.url.slice('/api/media/'.length));
       if (!media) return json(res,404,{error:'照片不存在。'});
       res.writeHead(200,{'Content-Type':media.mime,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
       res.end(media.bytes);return;
     }
     if (req.method === 'DELETE' && /^\/api\/media\/[a-f0-9-]{36}$/.test(req.url)) {
-      const deleted=store.deleteMedia(req.url.slice('/api/media/'.length));
-      json(res,deleted?200:404,deleted?{deleted:true,state:snapshot()}:{error:'照片不存在。'});
+      const deleted=await store.deleteMedia(req.url.slice('/api/media/'.length));
+      json(res,deleted?200:404,deleted?{deleted:true,state:await snapshot()}:{error:'照片不存在。'});
       return;
     }
     if (req.method === 'GET' && /^\/api\/turn\/[a-zA-Z0-9-]{8,80}$/.test(req.url)) {
-      const prior=store.priorTurn(req.url.slice('/api/turn/'.length));
-      json(res,prior?200:404,prior?{...prior.result,state:snapshot()}:{error:'请求尚未完成或不存在。'});
+      const prior=await store.priorTurn(req.url.slice('/api/turn/'.length));
+      json(res,prior?200:404,prior?{...prior.result,state:await snapshot()}:{error:'请求尚未完成或不存在。'});
       return;
     }
     if (req.method === 'PUT' && req.url === '/api/profile') {
       try {
         if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
         const body=await readRequestJson(req);
-        const profile=store.saveProfile(body.profile||body,body.timezone);
-        json(res,200,{profile,state:snapshot()});
-      } catch(error) { json(res,error.status||500,{error:error.message||'保存资料失败'}); }
+        const profile=await store.saveProfile(body.profile||body,body.timezone);
+        json(res,200,{profile,state:await snapshot()});
+      } catch(error) { json(res,error.status||500,{error:publicError(error,'保存资料失败')}); }
       return;
     }
     const manualRoute=/^\/api\/meals(?:\/([a-f0-9-]{36}))?$/.exec(req.url);
@@ -478,69 +509,69 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
       try {
         if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
         const body=await readRequestJson(req);
-        const profile=store.profile();
+        const profile=await store.profile();
         if (!profile) return json(res,409,{error:'请先完成建档。'});
-        const target=manualRoute[1]?store.manualTarget(manualRoute[1]):null;
+        const target=manualRoute[1]?await store.manualTarget(manualRoute[1]):null;
         if (manualRoute[1]&&!target) return json(res,404,{error:'找不到要修改的餐食。'});
         const date=target?.date||body.date;
-        if (!validMealDate(date,store.today())) return json(res,400,{error:'只能记录或修改过去一年内的日期。'});
+        if (!validMealDate(date,await store.today())) return json(res,400,{error:'只能记录或修改过去一年内的日期。'});
         if (!['早餐','午餐','晚餐','加餐'].includes(body.type)) return json(res,400,{error:'请选择早餐、午餐、晚餐或加餐。'});
         if (typeof body.description!=='string'||!body.description.trim()||body.description.trim().length>1000) return json(res,400,{error:'请填写 1–1000 字的食物和份量。'});
         if (!apiKey) return json(res,503,{error:'请先配置 DeepSeek API Key，才能估算手动填写的餐食。'});
         const description=body.description.trim();
-        if (!reserveModel()) return;
+        if (!await reserveModel()) return;
         const abort=new AbortController();
         const onClose=()=>abort.abort();res.once('close',onClose);
         let data;
         try {data=await estimateManualMeal({apiKey,model,fetchImpl,description,type:body.type,profile,signal:AbortSignal.any([abort.signal,AbortSignal.timeout(120_000)])});}
         finally {res.removeListener('close',onClose);}
         if (res.destroyed) return;
-        const meal=store.saveManualMeal({id:manualRoute[1]||null,date,type:body.type,description,data});
-        json(res,manualRoute[1]?200:201,{meal,state:snapshot()});
-      } catch(error) {json(res,error.status||500,{error:error.message||'保存餐食失败'});}
+        const meal=await store.saveManualMeal({id:manualRoute[1]||null,date,type:body.type,description,data});
+        json(res,manualRoute[1]?200:201,{meal,state:await snapshot()});
+      } catch(error) {json(res,error.status||500,{error:publicError(error,'保存餐食失败')});}
       return;
     }
     const deleteMealRoute=/^\/api\/meals\/([\w-]{1,80})$/.exec(req.url);
     if (req.method==='DELETE'&&deleteMealRoute) {
       try {
-        const deleted=store.deleteMeal(deleteMealRoute[1]);
-        json(res,deleted?200:404,deleted?{deleted,state:snapshot()}:{error:'餐食记录不存在。'});
-      } catch(error) {json(res,error.status||500,{error:error.message||'删除餐食失败'});}
+        const deleted=await store.deleteMeal(deleteMealRoute[1]);
+        json(res,deleted?200:404,deleted?{deleted,state:await snapshot()}:{error:'餐食记录不存在。'});
+      } catch(error) {json(res,error.status||500,{error:publicError(error,'删除餐食失败')});}
       return;
     }
     const deleteDayRoute=/^\/api\/history\/(\d{4}-\d{2}-\d{2})$/.exec(req.url);
     if (req.method==='DELETE'&&deleteDayRoute) {
       try {
         const date=deleteDayRoute[1];
-        if (!validHistoryDate(date,store.today())) return json(res,400,{error:'历史日期无效。'});
-        const deleted=store.deleteDay(date);
-        json(res,deleted?200:404,deleted?{...deleted,state:snapshot()}:{error:'当天没有可删除的记录。'});
-      } catch(error) {json(res,error.status||500,{error:error.message||'删除当天记录失败'});}
+        if (!validHistoryDate(date,await store.today())) return json(res,400,{error:'历史日期无效。'});
+        const deleted=await store.deleteDay(date);
+        json(res,deleted?200:404,deleted?{...deleted,state:await snapshot()}:{error:'当天没有可删除的记录。'});
+      } catch(error) {json(res,error.status||500,{error:publicError(error,'删除当天记录失败')});}
       return;
     }
     if (req.method === 'POST' && req.url === '/api/import') {
       try {
         if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
-        const body=await readRequestJson(req,20_000_000);
-        json(res,200,store.importData(body.backup,body.mode));
-      } catch(error) {json(res,error.status||400,{error:error.message||'导入失败'});}
+        const body=await readRequestJson(req,platformVercel?4_000_000:20_000_000);
+        json(res,200,await store.importData(body.backup,body.mode));
+      } catch(error) {json(res,error.status||400,{error:publicError(error,'导入失败')});}
       return;
     }
-    if (req.url === '/api/memories' && req.method === 'GET') return json(res,200,{memories:store.memories()});
+    if (req.url === '/api/memories' && req.method === 'GET') return json(res,200,{memories:await store.memories()});
     if (req.url === '/api/memories' && req.method === 'POST') {
       try {
         const body=await readRequestJson(req);
-        const memory=store.saveMemory(body.text);
-        json(res,201,{memory,state:snapshot()});
-      } catch(error) {json(res,error.status||400,{error:error.message||'保存习惯失败'});}
+        const memory=await store.saveMemory(body.text);
+        json(res,201,{memory,state:await snapshot()});
+      } catch(error) {json(res,error.status||400,{error:publicError(error,'保存习惯失败')});}
       return;
     }
     if (/^\/api\/memories\/[a-f0-9-]{36}$/.test(req.url) && ['PUT','DELETE'].includes(req.method)) {
       try {
         const id=req.url.slice('/api/memories/'.length);
-        const changed=req.method==='DELETE'?store.deleteMemory(id):store.updateMemory(id,(await readRequestJson(req)).text);
-        json(res,changed?200:404,changed?{changed:true,state:snapshot()}:{error:'习惯不存在。'});
-      } catch(error) {json(res,error.status||400,{error:error.message||'更新习惯失败'});}
+        const changed=req.method==='DELETE'?await store.deleteMemory(id):await store.updateMemory(id,(await readRequestJson(req)).text);
+        json(res,changed?200:404,changed?{changed:true,state:await snapshot()}:{error:'习惯不存在。'});
+      } catch(error) {json(res,error.status||400,{error:publicError(error,'更新习惯失败')});}
       return;
     }
 
@@ -558,32 +589,32 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
           return json(res,400,{error:'消息数据不完整或图片过大。'});
         }
         if (body.targetMealId && /^请把这顿改为[：:]?\s*$/.test(body.text)) return json(res,400,{error:'请先补充这顿实际吃了什么或改了多少。'});
-        const profile=store.profile();
+        const profile=await store.profile();
         if (!profile) return json(res,409,{error:'请先完成基本资料建档。'});
         const source=['voice','photo','text'].includes(body.source)?body.source:(body.image?'photo':'text');
         const requestInput={text:body.text.trim(),image:body.image||null,targetMealId:body.targetMealId||null,source};
         const requestHash=Store.hashRequest(requestInput);
-        const prior=store.priorTurn(body.requestId);
+        const prior=await store.priorTurn(body.requestId);
         if (prior) {
           if (prior.hash!==requestHash) return json(res,409,{error:'请求 ID 已用于另一条消息。'});
-          return json(res,200,{...prior.result,state:snapshot(),replayed:true});
+          return json(res,200,{...prior.result,state:await snapshot(),replayed:true});
         }
-        if (!reserveModel()) return;
-        const state=store.state({focusDate:body.targetMealId?store.manualTarget(body.targetMealId)?.date:undefined});
-        const clarification=store.clarification();
+        if (!await reserveModel()) return;
+        const state=await store.state({focusDate:body.targetMealId?(await store.manualTarget(body.targetMealId))?.date:undefined});
+        const clarification=await store.clarification();
         abort = new AbortController();
         res.on('close', () => {clientClosed=true;abort.abort();});
         timeout=setTimeout(()=>{timedOut=true;abort.abort();},120000);
         let imageDescription='';
         if (body.image) {
           imageDescription=await describeImage(body.image,{apiKey,visionModel,fetchImpl,signal:abort.signal});
-          store.logModelCall({requestId:body.requestId,model:visionModel,purpose:'vision',status:'completed'});
+          await store.logModelCall({requestId:body.requestId,model:visionModel,purpose:'vision',status:'completed'});
         }
         const upstream = await fetchImpl('https://api.deepseek.com/responses', {
           method: 'POST',
           headers: {'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json'},
           body: JSON.stringify({
-            model, instructions, input: buildInput(body,state,clarification,imageDescription,store.lastSevenSummary(state.activeDate)), stream: true,
+            model, instructions, input: buildInput(body,state,clarification,imageDescription,await store.lastSevenSummary(state.activeDate)), stream: true,
             reasoning: {effort: 'high'},
             max_output_tokens: 8000,
             text: {format: {type: 'json_schema', name: 'nutrition_turn', schema: turnSchema}},
@@ -638,15 +669,15 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
         if (clientClosed) return;
         const checked=validateResult(JSON.parse(outputText));
         // UI pagination must not hide potential correction targets or create a false unique match.
-        const allMeals=checked.action==='correction'?store.meals():[];
+        const allMeals=checked.action==='correction'?await store.meals():[];
         const result = enforceRecordBoundary(checked,body.text,Boolean(body.image),body.targetMealId,clarification,allMeals);
-        store.logModelCall({requestId:body.requestId,model,purpose:'nutrition-turn',status:'completed',inputTokens:usage?.input_tokens,outputTokens:usage?.output_tokens});
-        const committed=store.commitTurn({requestId:body.requestId,requestHash,conversationDate:state.activeDate,mealDate:resolveMealDate(result,body.text,state.activeDate,clarification),text:body.text.trim(),image:body.image||null,imageDescription,source,result,reasoning,elapsedSeconds:Math.max(1,Math.round((Date.now()-startedAt)/1000))});
-        sendEvent(res, 'result', {...committed,state:snapshot(),requestId:body.requestId});
+        await store.logModelCall({requestId:body.requestId,model,purpose:'nutrition-turn',status:'completed',inputTokens:usage?.input_tokens,outputTokens:usage?.output_tokens});
+        const committed=await store.commitTurn({requestId:body.requestId,requestHash,conversationDate:state.activeDate,mealDate:resolveMealDate(result,body.text,state.activeDate,clarification),text:body.text.trim(),image:body.image||null,imageDescription,source,result,reasoning,elapsedSeconds:Math.max(1,Math.round((Date.now()-startedAt)/1000))});
+        sendEvent(res, 'result', {...committed,state:await snapshot(),requestId:body.requestId});
         res.end();
       } catch (error) {
         if (res.writableEnded || clientClosed) return;
-        const message=timedOut?'模型响应超时，请重试。':(error.message||'模型请求失败');
+        const message=timedOut?'模型响应超时，请重试。':(publicError(error,'模型请求失败'));
         if (res.headersSent) { sendEvent(res, 'error', {message}); res.end(); }
         else json(res,error.status||500,{error:message});
       } finally {clearTimeout(timeout);}
@@ -665,11 +696,16 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
       console.error(`请求失败：${error.code||'INTERNAL_ERROR'}`);
       if (!res.headersSent && !res.destroyed) json(res,error.status||500,{error:error.status?error.message:'服务暂时不可用，请稍后重试。'});
       else if (!res.writableEnded) res.end();
-    } finally {releaseModel?.();releaseStore?.();releaseWrite?.();}
-  });
+    } finally {
+      for (const release of [releaseModel,releaseStore,releaseWrite]) {try {await release?.();} catch(error) {console.error('资源释放失败：'+(error.code||'RELEASE_ERROR'));}}
+      if (cloud && releaseWrite && req.userStore) await req.userStore.flushMediaGarbage().catch(()=>console.error('照片清理稍后重试。'));
+    }
+  };
+  const server=http.createServer(handler);
+  server.appHandler=handler;
   server.requestTimeout=30_000;
   server.headersTimeout=15_000;
-  server.on('close',()=>{clearInterval(cleanup);legacyStore?.close();stores.close();accounts?.close();});
+  server.on('close',()=>{clearInterval(cleanup);legacyStore?.close();stores.close();accounts?.close();if (cloud && !cloudDatabase) cloud.database.close().catch(()=>{});});
   return server;
 }
 
