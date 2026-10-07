@@ -82,3 +82,17 @@ test('History groups food by meal and manual edits update Today nutrition', () =
   today.click('nav',{view:'chat'});
   assert.match(today.app.innerHTML,/750<span class="stat-unit">kcal/);
 });
+
+test('Profile shows resting, activity and maintenance energy without double counting training', () => {
+  const today=openToday();
+  today.click('nav',{view:'profile'});
+  const p=today.profile;
+  const active=Math.round(p.maintenanceMin-p.bmrMin).toLocaleString('en-US');
+  assert.match(today.app.innerHTML,/静息代谢/);
+  assert.match(today.app.innerHTML,/日常活动增量/);
+  assert.match(today.app.innerHTML,/全天维持消耗/);
+  assert.match(today.app.innerHTML,new RegExp(`<strong>${p.bmrMin.toLocaleString('en-US')}<\\/strong>`));
+  assert.match(today.app.innerHTML,new RegExp(`${active}<\\/strong>`));
+  assert.match(today.app.innerHTML,new RegExp(`<strong>${p.maintenanceMin.toLocaleString('en-US')}<\\/strong>`));
+  assert.match(today.app.innerHTML,/不能可靠地拆出单次运动消耗/);
+});

@@ -272,6 +272,19 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .profile-hero .eyebrow { color: #a8cabc; }
 .profile-hero h2 { font-size: 23px; margin: 9px 0 8px; letter-spacing: -.04em; }
 .profile-hero p { font-size: 12px; color: #d2e0d5; line-height: 1.7; width: min(100%, 420px); margin: 0; }
+.energy-card { margin-top: 16px; padding: 23px 24px 20px; background: white; border: 1px solid #e4ebe3; border-radius: 19px; }
+.energy-heading { display: flex; justify-content: space-between; align-items: end; gap: 15px; margin-bottom: 18px; }
+.energy-heading h2 { margin: 8px 0 0; font-size: 18px; letter-spacing: -.04em; }
+.energy-unit { color: #8b998e; font-size: 10px; white-space: nowrap; }
+.energy-equation { display: grid; grid-template-columns: minmax(0,1fr) 13px minmax(0,1fr) 13px minmax(0,1fr); align-items: stretch; gap: 7px; }
+.energy-part { min-width: 0; display: flex; flex-direction: column; padding: 15px 12px 14px; background: #f8faf7; border: 1px solid #e5ebe4; border-radius: 12px; }
+.energy-part.activity { background: #f1f7f1; border-color: #ddeade; }
+.energy-part.total { background: #e7f0e8; border-color: #d5e5d7; }
+.energy-part-label { color: #627968; font-size: 10px; font-weight: 700; }
+.energy-part strong { color: #244b35; font-size: clamp(19px, 2.4vw, 25px); letter-spacing: -.055em; font-variant-numeric: tabular-nums; margin: 8px 0 5px; white-space: nowrap; }
+.energy-part small { color: #819084; font-size: 10px; line-height: 1.45; }
+.energy-operator { align-self: center; justify-self: center; color: #91a496; font-size: 15px; font-weight: 700; }
+.energy-explain { color: #728276; font-size: 11px; line-height: 1.65; margin: 16px 0 0; }
 .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 16px; }
 .profile-card { background: white; border: 1px solid var(--line); border-radius: 18px; padding: 20px; }
 .profile-card h3 { font-size: 13px; margin: 0 0 16px; }
@@ -379,8 +392,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .result-macros strong { color: #2d5f48; margin-left: 4px; }
 .estimate-note { background: #f5f8f4; border: 1px solid #e5eee4; border-radius: 16px; padding: 18px 20px; margin-top: 16px; }
 .estimate-note > strong { font-size: 12px; }
-.estimate-steps { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 12px 0; color: #315e45; font-size: 11px; font-weight: 600; }
-.estimate-steps svg { width: 13px; height: 13px; color: #96ae9b; }
 .estimate-note p { margin: 0; color: #7b8b7f; font-size: 11px; line-height: 1.7; }
 .history-empty { background: white; border: 1px solid var(--line); border-radius: 18px; padding: 44px 25px; text-align: center; }
 .history-empty > svg { width: 28px; height: 28px; color: var(--accent); }
@@ -410,6 +421,17 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .mobile-nav svg { width: 20px; height: 20px; }
   .section-page { padding: 0 20px 100px; }
   .toast { bottom: 162px; }
+}
+
+@media (max-width: 640px) {
+  .energy-card { padding: 19px 17px; }
+  .energy-heading { align-items: start; }
+  .energy-heading h2 { font-size: 16px; }
+  .energy-unit { padding-top: 2px; }
+  .energy-equation { grid-template-columns: 1fr; gap: 5px; }
+  .energy-part { padding: 12px 14px; }
+  .energy-part strong { margin: 4px 0; font-size: 23px; }
+  .energy-operator { font-size: 12px; line-height: 1; }
 }
 
 @media (max-width: 520px) {
