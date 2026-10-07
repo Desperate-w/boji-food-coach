@@ -44,6 +44,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 .main { min-width: 0; }
 .page { width: min(100%, 900px); margin: 0 auto; min-height: 100dvh; position: relative; }
+.wide-page, .profile-page { width: min(100%, 1216px); }
 .chat-page { display: flex; flex-direction: column; height: 100dvh; }
 .topbar { min-height: 73px; display: flex; justify-content: space-between; align-items: center; padding: 0 32px; gap: 16px; }
 .topbar-title { display: flex; align-items: baseline; gap: 11px; }
@@ -57,6 +58,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 .chat-scroll { overflow-y: auto; flex: 1; min-height: 0; padding: 10px 32px 180px; scroll-behavior: smooth; }
 .content-column { width: min(100%, 690px); margin: 0 auto; }
+.today-content { width: min(100%, 1040px); }
+.conversation-column { width: min(100%, 760px); margin: 0 auto; }
 .today-card { background: var(--surface); border: 1px solid #e9ede8; border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; margin: 4px 0 34px; }
 .today-main { padding: 25px 29px 24px; }
 .today-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 21px; }
@@ -168,7 +171,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .history-inline-link svg { width: 14px; height: 14px; }
 
 .composer-wrap { position: fixed; left: 244px; right: 0; bottom: 0; pointer-events: none; padding: 47px 24px 21px; background: linear-gradient(180deg, rgba(246,247,244,0), rgba(246,247,244,.96) 31%, var(--bg) 68%); }
-.composer-inner { width: min(100%, 690px); margin: 0 auto; pointer-events: auto; }
+.composer-inner { width: min(100%, 760px); margin: 0 auto; pointer-events: auto; }
 .composer { background: white; border: 1px solid #dce5db; box-shadow: 0 11px 34px rgba(32, 51, 36, .1); border-radius: 20px; min-height: 63px; display: flex; align-items: flex-end; padding: 10px; gap: 8px; }
 .composer:focus-within { border-color: #a7c9b0; }
 .composer textarea { border: 0; resize: none; outline: 0; flex: 1; min-height: 38px; max-height: 126px; padding: 9px 3px 7px; font-size: 13px; line-height: 1.6; color: var(--ink); background: transparent; }
@@ -191,13 +194,14 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 .section-page { padding: 0 32px 70px; }
 .section-inner { width: min(100%, 690px); margin: 0 auto; }
-.profile-page { width: min(100%, 1216px); }
-.profile-inner { width: min(100%, 1120px); }
+.wide-inner, .profile-inner { width: min(100%, 1120px); }
 .page-heading { padding: 29px 0 27px; }
 .page-heading .eyebrow { margin-bottom: 10px; }
 .page-heading h1 { font-size: 30px; letter-spacing: -.06em; margin: 0 0 6px; line-height: 1.3; }
 .page-heading p { color: var(--muted); font-size: 13px; margin: 0; line-height: 1.7; }
-.history-list { display: grid; gap: 12px; }
+.history-overview-grid { display: grid; grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr); gap: 16px; align-items: start; }
+.history-overview-grid > * { min-width: 0; }
+.history-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .history-card { border: 1px solid #e5ebe3; background: white; border-radius: 17px; padding: 18px 20px; width: 100%; text-align: left; display: flex; align-items: center; gap: 18px; }
 .history-card:hover { border-color: #a8c9b0; box-shadow: 0 10px 24px rgba(27, 57, 35, .06); }
 .history-date { width: 49px; text-align: center; padding-right: 18px; border-right: 1px solid var(--line); }
@@ -222,10 +226,11 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .meal-row > span { font-size: 12px; font-weight: 700; color: #5c6b60; white-space: nowrap; }
 .history-ai { background: var(--accent-soft); color: #466457; border-radius: 13px; margin-top: 23px; padding: 15px 16px; font-size: 12px; line-height: 1.65; }
 .history-conversation { border-top: 1px solid var(--line); margin-top: 29px; padding-top: 27px; }
-.history-conversation .message-list { margin-top: 21px; gap: 20px; }
+.history-conversation .message-list { width: min(100%, 760px); margin: 21px auto 0; gap: 20px; }
 .history-conversation .message.user { padding-left: 35px; }
 .history-conversation .receipt { box-shadow: none; }
 .history-nutrition { background: white; border: 1px solid var(--line); border-radius: 20px; padding: 23px 25px; margin-bottom: 16px; }
+.history-overview-grid .history-nutrition { margin-bottom: 0; }
 .history-detail .history-nutrition { border: 0; border-radius: 0; padding: 0; }
 .history-nutrition-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .history-nutrition-head h3 { font-size: 18px; letter-spacing: -.04em; margin: 8px 0 0; }
@@ -241,7 +246,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .history-nutrition .range-track, .history-nutrition .protein-track { height: 6px; margin-top: 7px; }
 .history-nutrition-note { margin: 16px 0 0; color: #8b978d; font-size: 10px; line-height: 1.5; }
 .meal-board { background: white; border: 1px solid var(--line); border-radius: 20px; padding: 23px 25px 25px; }
-.history-detail .meal-board { border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 24px 0 0; }
+.history-detail .meal-board { border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 0 0 0 24px; }
 .meal-board-heading { margin-bottom: 17px; }
 .meal-board-heading p { color: var(--muted); font-size: 11px; margin: 8px 0 0; line-height: 1.6; }
 .meal-slot-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
@@ -405,6 +410,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 @media (max-width: 1240px) {
   .profile-top-grid { grid-template-columns: 1fr; }
   .profile-hero { min-height: 0; }
+  .history-overview-grid { grid-template-columns: 1fr; }
+  .history-detail .history-overview-grid { gap: 0; }
+  .history-detail .history-nutrition { padding-bottom: 24px; }
+  .history-detail .meal-board { border-left: 0; border-top: 1px solid var(--line); padding: 24px 0 0; }
 }
 
 @media (max-width: 860px) {
@@ -430,6 +439,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .mobile-nav svg { width: 20px; height: 20px; }
   .section-page { padding: 0 20px 100px; }
   .toast { bottom: 162px; }
+}
+
+@media (max-width: 760px) {
+  .history-list { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
