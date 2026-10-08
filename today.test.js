@@ -37,6 +37,7 @@ function openToday(options={}) {
       throw new Error(`Unexpected request: ${url}`);
     };
   }
+  vm.runInContext(fs.readFileSync(`${__dirname}/photos.js`,'utf8'),context);
   vm.runInContext(fs.readFileSync(`${__dirname}/app.js`,'utf8'),context);
   const click=(action,textOrData)=>handlers.click({target:{closest(){return {dataset:{action,...(typeof textOrData==='string'?{text:textOrData}:textOrData||{})}};}}});
   const proteinFill=()=>Number(app.innerHTML.match(/class="protein-fill" style="width:(\d+)%"/)?.[1]);

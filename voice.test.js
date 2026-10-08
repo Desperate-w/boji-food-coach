@@ -26,6 +26,7 @@ function openDemo(Recognition) {
   const context={window,document,URLSearchParams,localStorage:{getItem(){return storage.value;},setItem(_key,value){storage.value=value;}},requestAnimationFrame(callback){callback();},setTimeout(){return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){},console};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(`${__dirname}/nutrition.js`,'utf8'),context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/photos.js`,'utf8'),context);
   vm.runInContext(fs.readFileSync(`${__dirname}/app.js`,'utf8'),context);
   const click=action=>handlers.click({target:{closest(){return {dataset:{action}};}}});
   return {app,click,handlers,transcriptField,storage};

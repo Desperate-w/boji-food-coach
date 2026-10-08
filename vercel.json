@@ -8,7 +8,7 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 300,
-      "includeFiles": "{index.html,login.html,app.js,login.js,nutrition.js,styles.css,db/schema.sql}"
+      "includeFiles": "{index.html,login.html,app.js,login.js,nutrition.js,photos.js,styles.css,db/schema.sql}"
     }
   },
   "rewrites": [

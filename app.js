@@ -29,6 +29,7 @@
   const sampleTexts = new Set(['中午吃了一份鸡腿饭，加一个蛋，米饭剩了一点。','晚上可以吃火锅吗？','可以。按今天的进度，火锅优先选牛肉、虾、鱼和蔬菜；蘸料清淡一点，主食按食欲吃就好。']);
   const withoutSamples = records => records.filter(record => !sampleIds.has(record.id) && !sampleIds.has(record.receipt?.id) && !sampleTexts.has(record.text));
   const nutrition = window.BojiNutrition;
+  const photos = window.BojiPhotos;
   let csrfToken='';
   let historyLoadId=0;
   window.addEventListener('pageshow',event=>{
@@ -55,7 +56,7 @@
       view:'chat', historyDetail:null, expanded:false, menuOpen:false, modal:null, onboardStep:0, onboardingDraft:emptyDraft(), onboardingComplete:false, correctionTarget:null,
       voiceStatus:'idle', voiceTranscript:'', voiceError:'',
       activeDate:dateKey(), archives:{}, historyPage:null, historyLoading:false,
-      attachment:null, draft:'', currentFeedback:null, pending:null, requestError:null,
+      attachments:[], photoPreparing:false, draft:'', currentFeedback:null, pending:null, requestError:null,
       connection:{mode:'checking', model:'', provider:''},
       serverToday:null, retryRequestId:null, retrySource:null, importBackup:null, memories:[], memoryDraft:'', memoryEditId:null,
       profile:null, meals:[], messages:[], mealDraft:null, mealSaving:false, mealError:'', deleteTarget:null, deleteSaving:false, deleteError:'',
@@ -66,7 +67,7 @@
   try {
     const saved = /^https?:$/.test(window.location?.protocol||'')?null:JSON.parse(localStorage.getItem(STORAGE_KEY));
     state = saved && Array.isArray(saved.meals) && Array.isArray(saved.messages)
-      ? {...seedState(), ...saved, attachment:null, currentFeedback:null, pending:null, requestError:null, connection:{mode:'checking', model:''}, modal:null, menuOpen:false}
+      ? {...seedState(), ...saved, attachments:[], photoPreparing:false, currentFeedback:null, pending:null, requestError:null, connection:{mode:'checking', model:''}, modal:null, menuOpen:false}
       : seedState();
     if (saved && !saved.onboardingComplete && !saved.onboardingDraft) {
       const legacyProfile=saved.profile;
@@ -194,16 +195,22 @@
     return `<details class="reasoning-details"><summary>${m.elapsedSeconds!=null?`思考了 ${m.elapsedSeconds} 秒 · `:''}查看${legacySummary?'思考摘要':'思考过程'} ${icon('down')}</summary><div class="reasoning-content">${content}<small>${legacySummary?'这是之前模型提供的思考摘要。':'这里显示 DeepSeek 本轮实际返回的思考文本。'}</small></div></details>`;
   }
   function renderMessage(m, showEdit=true) {
-    if (m.role==='user') return `<article class="message user"><div class="user-bubble">${m.photoUrl?`<img class="user-photo" src="${escapeHtml(m.photoUrl)}" alt="上传的饮食照片">${state.connection.mode==='live'&&/^\/api\/media\/[a-f0-9-]{36}$/.test(m.photoUrl)?`<button class="photo-delete" data-action="delete-photo" data-id="${m.photoUrl.slice('/api/media/'.length)}">删除这张照片</button>`:''}`:''}${escapeHtml(m.text||'上传了一张食物照片')}${m.recordDeleted?'<small class="deleted-record-tag">关联餐食已删除</small>':''}</div></article>`;
+    if (m.role==='user') {
+      const urls=photos.photoUrls(m);
+      return `<article class="message user"><div class="user-bubble">${urls.length?`<div class="message-photos ${urls.length===1?'single':''}">${urls.map((url,index)=>`<figure><img class="user-photo" src="${escapeHtml(url)}" alt="饮食照片 ${index+1}" loading="lazy">${state.connection.mode==='live'&&/^\/api\/media\/[a-f0-9-]{36}$/.test(url)?`<button class="photo-delete" data-action="delete-photo" data-id="${url.slice('/api/media/'.length)}" aria-label="删除第 ${index+1} 张照片">删除照片${urls.length>1?` ${index+1}`:''}</button>`:''}</figure>`).join('')}</div>`:''}${escapeHtml(m.text||`上传了 ${urls.length} 张食物照片`)}${m.recordDeleted?'<small class="deleted-record-tag">关联餐食已删除</small>':''}</div></article>`;
+    }
     return `<article class="message assistant"><div class="assistant-message"><div class="assistant-avatar">${icon('spark')}</div><div class="assistant-body">${renderRichText(m.text)}${m.receipt?renderReceipt(m.receipt,m.revised,showEdit):''}${m.after?renderRichText(m.after):''}${renderReasoning(m)}<div class="message-meta">${escapeHtml(m.time||'刚刚')}</div></div></div></article>`;
   }
   function renderComposer() {
-    const disabled=state.pending?'disabled':'';
+    const disabled=state.pending||state.photoPreparing?'disabled':'';
     const hint=state.connection.mode==='live'
       ? `由 ${escapeHtml(state.connection.model)} 回复；营养数据仍是估算值`
       : state.connection.mode==='unavailable'?'无法连接本地服务；刷新页面重试':state.connection.mode==='preview'?'对话为本地模拟；个人计划按填写资料实时估算':'当前为本地模拟回复；启动服务并配置 API Key 后可体验真实模型';
     return `<div class="composer-wrap"><div class="composer-inner"><div class="composer-menu ${state.menuOpen?'open':''}" id="composer-menu"><button data-action="open-photo">${icon('camera')} 拍照或选择照片</button><button data-action="voice-demo">${icon('mic')} 语音输入</button></div>
-      <div class="attachment-preview ${state.attachment?'visible':''}">${state.attachment?`<img src="${escapeHtml(state.attachment.url)}" alt="待发送照片"><span>照片已添加</span><button data-action="remove-photo" aria-label="移除照片">${icon('close')}</button>`:''}</div>
+      <div class="attachment-preview ${state.attachments.length||state.photoPreparing?'visible':''}" aria-busy="${state.photoPreparing}">
+        <div class="attachment-heading" aria-live="polite"><strong>${state.photoPreparing?'正在处理照片…':`${state.attachments.length} / ${photos.MAX_PHOTOS} 张照片`}</strong><span>一起发送，可补充份量和餐次</span></div>
+        <div class="attachment-strip">${state.attachments.map((photo,index)=>`<figure class="attachment-item"><img src="${escapeHtml(photo.url)}" alt="待发送照片 ${index+1}：${escapeHtml(photo.name)}"><span class="attachment-number">${index+1}</span><button type="button" data-action="remove-photo" data-index="${index}" aria-label="移除第 ${index+1} 张照片" ${disabled}>${icon('close')}</button></figure>`).join('')}${state.attachments.length<photos.MAX_PHOTOS?`<button type="button" class="attachment-add" data-action="open-photo" aria-label="继续添加照片" ${disabled}>${icon('plus')}<span>继续添加</span></button>`:''}</div>
+      </div>
       <form class="composer" id="chat-form"><button class="composer-button" type="button" data-action="toggle-menu" aria-label="添加照片或语音" aria-expanded="${state.menuOpen}" ${disabled}>${icon('plus')}</button><textarea id="message-input" rows="1" placeholder="说说吃了什么，或问我怎么吃…" aria-label="输入消息" ${disabled}>${escapeHtml(state.draft||'')}</textarea><button class="composer-button" type="button" data-action="voice-demo" aria-label="语音输入" ${disabled}>${icon('mic')}</button><button class="composer-button send" type="submit" aria-label="发送消息" ${disabled}>${icon('send')}</button></form><div class="composer-hint">${hint}</div></div></div>`;
   }
   function renderPending() {
@@ -217,8 +224,8 @@
       ? `<section class="request-error" role="alert"><strong>这次没有收到模型回复</strong><p>${escapeHtml(state.requestError)}</p><button class="text-button" data-action="retry-live">重试发送</button></section>`
       : state.currentFeedback
         ? `<section class="feedback-panel" aria-live="polite"><div class="feedback-heading"><span class="eyebrow">刚刚的反馈</span><button class="text-button" data-action="dismiss-feedback">收起</button></div>${renderMessage(state.currentFeedback)}</section>`
-        : `<section class="welcome-block"><div class="eyebrow">随手记录</div><h2>吃完，告诉我就好。</h2><p>拍一张照、说一句话，或者直接问下一顿怎么吃。</p></section>`;
-    return `<div class="page chat-page wide-page">${renderTopbar()}<main class="chat-scroll" id="chat-scroll"><div class="content-column today-content">${renderToday()}<div class="conversation-column">${response}<div class="suggestions"><button class="suggestion" data-action="example" data-text="刚吃了两个鸡蛋">试试记录：刚吃了两个鸡蛋</button><button class="suggestion" data-action="example" data-text="我晚上还能吃麦当劳吗？">问问：今晚还能吃麦当劳吗？</button>${state.meals.length?`<button class="suggestion" data-action="example" data-text="米饭其实只吃了一半">修正：米饭只吃了一半</button>`:''}</div>${state.meals.length||state.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的饮食与交流记录 ${icon('chevron')}</button>`:''}</div></div></main>${renderComposer()}</div>`;
+        : `<section class="welcome-block"><div class="eyebrow">随手记录</div><h2>吃完，告诉我就好。</h2><p>拍几张照、说一句话，或者直接问下一顿怎么吃。</p></section>`;
+    return `<div class="page chat-page wide-page ${state.attachments.length||state.photoPreparing?'has-attachments':''}">${renderTopbar()}<main class="chat-scroll" id="chat-scroll"><div class="content-column today-content">${renderToday()}<div class="conversation-column">${response}<div class="suggestions"><button class="suggestion" data-action="example" data-text="刚吃了两个鸡蛋">试试记录：刚吃了两个鸡蛋</button><button class="suggestion" data-action="example" data-text="我晚上还能吃麦当劳吗？">问问：今晚还能吃麦当劳吗？</button>${state.meals.length?`<button class="suggestion" data-action="example" data-text="米饭其实只吃了一半">修正：米饭只吃了一半</button>`:''}</div>${state.meals.length||state.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的饮食与交流记录 ${icon('chevron')}</button>`:''}</div></div></main>${renderComposer()}</div>`;
   }
 
   function historyFor(day) {
@@ -562,20 +569,20 @@
     state.pending=null;state.requestError=null;state.retryRequestId=null;state.retrySource=null;state.correctionTarget=null;
     render();scrollBottom();
   }
-  async function sendLiveMessage(rawText, attachment, options={}) {
+  async function sendLiveMessage(rawText, attachments, options={}) {
     const text=rawText.trim();
-    if (!text&&!attachment) return;
+    if (!text&&!attachments.length) return;
     const requestId=options.requestId||uid()+uid();
     state.pending={phase:'thinking',reasoning:'',reasoningOpen:false,text,startedAt:Date.now()};
     state.requestError=null;state.currentFeedback=null;state.menuOpen=false;
-    state.draft='';state.attachment=null;render();scrollBottom();
+    state.draft='';state.attachments=[];render();scrollBottom();
     clearInterval(thinkingTimer);
     thinkingTimer=setInterval(()=>{const el=document.getElementById('thinking-seconds');if(el&&state.pending)el.textContent=`${Math.floor((Date.now()-state.pending.startedAt)/1000)} 秒`;},1000);
     const controller=new AbortController();liveController=controller;
     try {
       const response=await apiFetch('/api/chat',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({requestId,text,image:attachment?.url||null,targetMealId:state.correctionTarget||null,source:options.source||(attachment?'photo':'text')}),
+        body:JSON.stringify({requestId,text,...(attachments.length>1?{images:attachments.map(photo=>photo.url)}:{image:attachments[0]?.url||null}),targetMealId:state.correctionTarget||null,source:options.source||(attachments.length?'photo':'text')}),
         signal:controller.signal,
       });
       if (!response.ok) {
@@ -606,26 +613,26 @@
       clearInterval(thinkingTimer);
       clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
       state.pending=null;state.requestError=controller.signal.aborted?'已停止生成。输入已保留，可以重试。':(error.message||'连接失败，请重试');
-      state.retryRequestId=requestId;state.retrySource=options.source||(attachment?'photo':'text');state.draft=text;state.attachment=attachment||null;render();
+      state.retryRequestId=requestId;state.retrySource=options.source||(attachments.length?'photo':'text');state.draft=text;state.attachments=attachments;render();
     } finally {if (liveController===controller) liveController=null;}
   }
-  function sendMessage(rawText, attachment=state.attachment, options={}) {
+  function sendMessage(rawText, attachments=state.attachments, options={}) {
+    attachments=Array.isArray(attachments)?attachments:attachments?[attachments]:[];
     if (ensureCurrentDay()) render();
-    if (state.pending) return;
+    if (state.pending||state.photoPreparing) return;
     if (['checking','unavailable'].includes(state.connection.mode)&&/^https?:$/.test(window.location?.protocol||'')) return toast('本地服务尚未就绪，请稍后刷新重试');
-    if (state.connection.mode==='live') return sendLiveMessage(rawText,attachment,options);
-    return sendDemoMessage(rawText,attachment);
+    if (state.connection.mode==='live') return sendLiveMessage(rawText,attachments,options);
+    return sendDemoMessage(rawText,attachments);
   }
-  function sendDemoMessage(rawText, attachment=state.attachment) {
-    const text=rawText.trim(); if (!text && !attachment) return;
-    const photoUrl=attachment?.url||null;
-    state.messages.push({id:uid(), role:'user', text:text||'上传了一张食物照片', photoUrl, time:timeNow()});
-    const kind=classify(text, !!attachment);
+  function sendDemoMessage(rawText, attachments=state.attachments) {
+    const text=rawText.trim(); if (!text && !attachments.length) return;
+    state.messages.push(photos.withPhotoUrls({id:uid(), role:'user', text:text||`上传了 ${attachments.length} 张食物照片`, time:timeNow()},attachments.map(photo=>photo.url)));
+    const kind=classify(text, !!attachments.length);
     let reply;
     if (kind==='consumed') {
-      const meal=estimateMeal(text, !!attachment); state.meals.push(meal);
+      const meal=estimateMeal(text, !!attachments.length); state.meals.push(meal);
       const t=totals();
-      reply={text:attachment?'已根据照片做了一次演示估算，记下了。':'记下了。', receipt:{...meal}, after:`今天累计约 ${fmt(t.calories)} kcal、蛋白质 ${fmt(t.protein)}g。${advice()}`};
+      reply={text:attachments.length?'已根据照片做了一次演示估算，记下了。':'记下了。', receipt:{...meal}, after:`今天累计约 ${fmt(t.calories)} kcal、蛋白质 ${fmt(t.protein)}g。${advice()}`};
     } else if (kind==='correction') {
       const meal=findMealToCorrect(text);
       const reduction=/一半|只有|少一点|没那么多/.test(text)?120:80;
@@ -650,7 +657,7 @@
     const assistantMessage={id:uid(), role:'assistant', ...reply, time:timeNow()};
     state.messages.push(assistantMessage);
     state.currentFeedback=assistantMessage;
-    state.attachment=null; state.draft=''; state.menuOpen=false; state.correctionTarget=null; render(); scrollBottom();
+    state.attachments=[]; state.draft=''; state.menuOpen=false; state.correctionTarget=null; render(); scrollBottom();
   }
   async function handleOnboardNext() {
     const d=state.onboardingDraft;
@@ -738,10 +745,10 @@
     else if (action==='dismiss-feedback') {state.currentFeedback=null;render();}
     else if (action==='toggle-pending-reasoning' && state.pending) {state.pending.reasoningOpen=!state.pending.reasoningOpen;render();}
     else if (action==='stop-live') liveController?.abort();
-    else if (action==='retry-live') sendMessage(state.draft,state.attachment,{requestId:state.retryRequestId,source:state.retrySource});
+    else if (action==='retry-live') sendMessage(state.draft,state.attachments,{requestId:state.retryRequestId,source:state.retrySource});
     else if (action==='toggle-menu') {state.menuOpen=!state.menuOpen;document.getElementById('composer-menu')?.classList.toggle('open',state.menuOpen);button.setAttribute('aria-expanded',String(state.menuOpen));}
-    else if (action==='open-photo') {state.menuOpen=false;document.getElementById('composer-menu')?.classList.remove('open');photoInput.click();}
-    else if (action==='remove-photo') {state.attachment=null;updateComposerPhoto();}
+    else if (action==='open-photo') {if (state.pending||state.photoPreparing) return;if (state.attachments.length>=photos.MAX_PHOTOS) return toast(`每条消息最多添加 ${photos.MAX_PHOTOS} 张照片`);state.menuOpen=false;document.getElementById('composer-menu')?.classList.remove('open');photoInput.click();}
+    else if (action==='remove-photo') {if (state.pending||state.photoPreparing) return;state.attachments.splice(Number(button.dataset.index),1);updateComposerPhoto();}
     else if (action==='example') sendMessage(button.dataset.text);
     else if (action==='correct-meal') {state.correctionTarget=button.dataset.meal;state.draft=state.connection.mode==='live'?'请把这顿改为：':'米饭其实只吃了一半';state.view='chat';render();requestAnimationFrame(()=>document.getElementById('message-input')?.focus());}
     else if (action==='onboarding') {state.modal='onboarding';state.onboardStep=0;state.onboardingDraft=profileDraft(state.profile);render();}
@@ -824,20 +831,31 @@
   document.addEventListener('keydown', e => { if (e.target.id==='message-input'&&e.key==='Enter'&&!e.shiftKey) {e.preventDefault();sendMessage(e.target.value);} });
   function preparePhoto(file) {
     return new Promise((resolve, reject) => {
+      if (!file.type.startsWith('image/')) return reject(new Error('请选择图片文件'));
+      if (file.size>20_000_000) return reject(new Error('单张原图不能超过 20 MB'));
       const reader=new FileReader();
       reader.onerror=()=>reject(new Error('读取照片失败'));
       reader.onload=()=>{
         const image=new Image();
-        image.onerror=()=>reject(new Error('照片格式不受支持'));
+        image.onerror=()=>reject(new Error('照片格式不受支持，请换成 JPG、PNG 或 WebP'));
         image.onload=()=>{
-          const scale=Math.min(1,900/Math.max(image.width,image.height));
-          const canvas=document.createElement('canvas');
-          canvas.width=Math.round(image.width*scale); canvas.height=Math.round(image.height*scale);
-          const context=canvas.getContext('2d');
-          if (!context) {reject(new Error('无法处理照片'));return;}
-          context.fillStyle='#fff'; context.fillRect(0,0,canvas.width,canvas.height);
-          context.drawImage(image,0,0,canvas.width,canvas.height);
-          resolve(canvas.toDataURL('image/jpeg',.76));
+          try {
+            if (!image.width||!image.height) throw new Error('照片尺寸无效');
+            let scale=Math.min(1,1280/Math.max(image.width,image.height));
+            const canvas=document.createElement('canvas'),context=canvas.getContext('2d');
+            if (!context) throw new Error('无法处理照片');
+            for (let attempt=0;attempt<6;attempt++) {
+              canvas.width=Math.max(1,Math.round(image.width*scale));canvas.height=Math.max(1,Math.round(image.height*scale));
+              context.fillStyle='#fff';context.fillRect(0,0,canvas.width,canvas.height);
+              context.drawImage(image,0,0,canvas.width,canvas.height);
+              for (const quality of [.82,.68,.54]) {
+                const url=canvas.toDataURL('image/jpeg',quality);
+                if (photos.imageBytes(url)<=photos.MAX_UPLOAD_PHOTO_BYTES) return resolve(url);
+              }
+              scale*=.75;
+            }
+            throw new Error('照片压缩失败，请换一张较小的图片');
+          } catch(error) {reject(error);}
         };
         image.src=reader.result;
       };
@@ -845,12 +863,20 @@
     });
   }
   photoInput.addEventListener('change', async e => {
-    const file=e.target.files?.[0]; if (!file) return;
-    photoInput.value='';
+    const files=Array.from(e.target.files||[]);photoInput.value='';
+    if (!files.length||state.pending||state.photoPreparing) return;
+    if (files.length+state.attachments.length>photos.MAX_PHOTOS) return toast(`每条消息最多添加 ${photos.MAX_PHOTOS} 张照片，请重新选择`);
+    state.photoPreparing=true;updateComposerPhoto();
+    const prepared=[];
     try {
-      state.attachment={name:file.name,url:await preparePhoto(file)};
-      updateComposerPhoto(); toast('照片已添加，可以补充一句说明');
-    } catch { toast('照片读取失败，请换一张试试'); }
+      for (const file of files) {
+        try {prepared.push({name:file.name,url:await preparePhoto(file)});}
+        catch(error) {throw new Error(`${file.name}：${error.message}`);}
+      }
+      state.attachments.push(...prepared);
+      toast(`已添加 ${files.length} 张照片，可以补充一句说明`);
+    } catch(error) {toast(error.message||'照片读取失败，请重试');}
+    finally {state.photoPreparing=false;updateComposerPhoto();}
   });
   backupInput?.addEventListener('change', async e => {
     const file=e.target.files?.[0];if (!file) return;
@@ -913,7 +939,7 @@
       if (state.modal!=='voice'||state.voiceStatus==='error') return;
       if (!state.voiceTranscript) {state.voiceStatus='error';state.voiceError='没有识别到文字。请重试，或改用文字输入。';render();return;}
       if (state.voiceStatus==='processing') {state.voiceStatus='review';render();return;}
-      state.modal=null;sendMessage(state.voiceTranscript,null,{source:'voice'});
+      state.modal=null;sendMessage(state.voiceTranscript,state.attachments,{source:'voice'});
     };
     state.voiceStatus='starting';state.voiceError='';
     try {recognition.start();render();}

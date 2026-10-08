@@ -1,3 +1,4 @@
+const photos=require('./photos.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -195,7 +196,7 @@ class Store {
     const mealIds=this.db.prepare('SELECT id FROM meal WHERE date=?').all(date).map(row=>row.id);
     const messages=this.db.prepare('SELECT id,payload_json FROM conversation_message WHERE date=?').all(date);
     if (!mealIds.length&&!messages.length) return null;
-    const mediaIds=new Set(messages.map(row=>/^\/api\/media\/([a-f0-9-]{36})$/.exec(parse(row.payload_json)?.photoUrl||'')?.[1]).filter(Boolean));
+    const mediaIds=new Set(messages.flatMap(row=>photos.photoUrls(parse(row.payload_json))).map(url=>/^\/api\/media\/([a-f0-9-]{36})$/.exec(url)?.[1]).filter(Boolean));
     const removedFiles=[];
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -301,7 +302,7 @@ class Store {
     try {
       for (const message of this.db.prepare('SELECT id,payload_json FROM conversation_message WHERE payload_json LIKE ?').all(`%${url}%`)) {
         const payload=parse(message.payload_json);
-        if (payload.photoUrl===url) {payload.photoUrl=null;this.db.prepare('UPDATE conversation_message SET payload_json=? WHERE id=?').run(JSON.stringify(payload),message.id);}
+        if (photos.photoUrls(payload).includes(url)) {this.db.prepare('UPDATE conversation_message SET payload_json=? WHERE id=?').run(JSON.stringify(photos.withPhotoUrls(payload,photos.photoUrls(payload).filter(item=>item!==url))),message.id);}
       }
       this.db.prepare('DELETE FROM media WHERE id=?').run(id);
       this.db.exec('COMMIT');
@@ -311,9 +312,10 @@ class Store {
   }
   priorTurn(requestId) { const row=this.db.prepare('SELECT request_hash,result_json FROM turn_request WHERE request_id=?').get(requestId); return row ? {hash:row.request_hash,result:parse(row.result_json)} : null; }
   static hashRequest(input) { return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex'); }
-  commitTurn({requestId, requestHash, conversationDate, mealDate, text, image, imageDescription, source, result, reasoning, elapsedSeconds}) {
+  commitTurn({requestId, requestHash, conversationDate, mealDate, text, image, images, imageDescription, source, result, reasoning, elapsedSeconds}) {
     conversationDate ||= this.today();mealDate ||= conversationDate;
-    let savedPhoto=null;
+    const savedPhotos=[];
+    const inputPhotos=photos.validateImages(photos.inputImages({image,images}));
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const prior = this.priorTurn(requestId);
@@ -348,8 +350,8 @@ class Store {
       else this.db.prepare('DELETE FROM clarification WHERE id=1').run();
       const explicitMemory=/^(?:请)?记住[：:，, ]*(.+?)[。.!！]?$/u.exec(text)?.[1];
       if (explicitMemory&&!/[?？]|今天|这顿|刚才|本次/.test(explicitMemory)&&explicitMemory.length>=2&&explicitMemory.length<=200) this.saveMemory(explicitMemory);
-      if (image) savedPhoto=this.savePhoto(image);
-      const userMessage={id:uid(),role:'user',text:text||'上传了一张食物照片',photoUrl:savedPhoto?.url||null,time:displayTime};
+      for (const url of inputPhotos) savedPhotos.push(this.savePhoto(url));
+      const userMessage=photos.withPhotoUrls({id:uid(),role:'user',text:text||`上传了 ${inputPhotos.length} 张食物照片`,time:displayTime},savedPhotos.map(photo=>photo.url));
       const assistantMessage={id:uid(),role:'assistant',text:result.reply,receipt,revised,time:displayTime,live:true,reasoningText:reasoning||'',elapsedSeconds};
       if (receipt) {
         const dayMeals=this.meals(mealDate), sum=totals(dayMeals);
@@ -361,15 +363,15 @@ class Store {
       this.db.prepare('INSERT INTO turn_request(request_id,request_hash,completed_at,result_json) VALUES(?,?,?,?)').run(requestId,requestHash,timestamp,JSON.stringify(response));
       this.db.exec('COMMIT');
       return response;
-    } catch (error) { this.db.exec('ROLLBACK');if (savedPhoto) fs.rmSync(path.join(this.mediaDir,savedPhoto.filename),{force:true});throw error; }
+    } catch (error) { this.db.exec('ROLLBACK');for (const photo of savedPhotos) fs.rmSync(path.join(this.mediaDir,photo.filename),{force:true});throw error; }
   }
   exportData() {
-    const messages=this.messages().map(message=>{
-      const id=/^\/api\/media\/([a-f0-9-]+)$/.exec(message.photoUrl||'')?.[1];
-      if (!id) return message;
+    const messages=this.messages().map(message=>photos.withPhotoUrls(message,photos.photoUrls(message).flatMap(url=>{
+      const id=/^\/api\/media\/([a-f0-9-]+)$/.exec(url)?.[1];
+      if (!id) return [url];
       const photo=this.readMedia(id);
-      return photo?{...message,photoUrl:`data:${photo.mime};base64,${photo.bytes.toString('base64')}`}:message;
-    });
+      return photo?[`data:${photo.mime};base64,${photo.bytes.toString('base64')}`]:[];
+    })));
     return {format:'boji-backup-v1',exportedAt:now(),profile:this.profile(),meals:this.meals(),messages,memories:this.memories(),revisions:this.db.prepare('SELECT meal_id,changed_at,before_json,after_json,reason FROM meal_revision ORDER BY changed_at').all()};
   }
   importData(backup, mode='all') {
@@ -403,7 +405,7 @@ class Store {
       if (!source||typeof source!=='object'||!['user','assistant'].includes(source.role)||typeof source.text!=='string'||source.text.length>8000) throw new Error('备份中的交流记录无效。');
       const message={id:typeof source.id==='string'&&/^[\w-]{1,80}$/.test(source.id)?source.id:uid(),role:source.role,text:source.text,time:typeof source.time==='string'?source.time.slice(0,30):''};
       if (typeof source.reasoningText==='string') message.reasoningText=source.reasoningText.slice(0,30000);
-      if (typeof source.photoUrl==='string'&&/^data:image\/(jpeg|png|webp);base64,/.test(source.photoUrl)&&source.photoUrl.length<1_600_000) message.photoUrl=source.photoUrl;
+      Object.assign(message,photos.withPhotoUrls(message,photos.backupPhotoUrls(source)));
       if (source.receipt && typeof source.receipt==='object') message.receipt=source.receipt;
       if (source.revised===true) message.revised=true;
       message.importedDemo=legacy||Boolean(source.importedDemo);
@@ -432,11 +434,10 @@ class Store {
       for (let index=0;index<messages.length;index++) {
         const {date,message}=messages[index];
         if (this.db.prepare('SELECT 1 FROM conversation_message WHERE id=?').get(message.id)) continue;
-        if (message.photoUrl?.startsWith('data:image/')) {
-          const photo=this.savePhoto(message.photoUrl);
-          importedMedia.push(photo.filename);
-          message.photoUrl=photo.url;
-        }
+        const urls=photos.photoUrls(message).map(url=>{
+          const photo=this.savePhoto(url);importedMedia.push(photo.filename);return photo.url;
+        });
+        Object.assign(message,photos.withPhotoUrls(message,urls));
         const timestamp=new Date(Date.parse(`${date}T12:00:00.000Z`)+index*1000).toISOString();
         const change=this.db.prepare('INSERT OR IGNORE INTO conversation_message(id,date,created_at,role,related_meal_id,payload_json) VALUES(?,?,?,?,?,?)').run(message.id,date,timestamp,message.role,message.receipt?.id||null,JSON.stringify(message));
         messageCount+=change.changes;

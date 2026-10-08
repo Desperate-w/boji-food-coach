@@ -1,3 +1,4 @@
+const photos=require('./photos.js');
 const crypto=require('node:crypto');
 const nutrition=require('./nutrition.js');
 const {localDate,totals,dailyStatus,dailyAdvice,safeTimeZone}=require('./store.js');
@@ -120,8 +121,8 @@ class CloudStore {
       await store.query('DELETE FROM boji_meal WHERE account_id=$1 AND date=$2',[this.accountId,date]);
       await store.query('DELETE FROM boji_message WHERE account_id=$1 AND date=$2',[this.accountId,date]);
       await store.query('DELETE FROM boji_clarification WHERE account_id=$1 AND date=$2',[this.accountId,date]);
-      for (const id of new Set(messages.map(row=>/^\/api\/media\/([a-f0-9-]{36})$/.exec(row.photoUrl||'')?.[1]).filter(Boolean))) {
-        const references=await store.query("SELECT 1 FROM boji_message WHERE account_id=$1 AND payload->>'photoUrl'=$2 LIMIT 1",[this.accountId,'/api/media/'+id]);
+      for (const id of new Set(messages.flatMap(row=>photos.photoUrls(row)).map(url=>/^\/api\/media\/([a-f0-9-]{36})$/.exec(url)?.[1]).filter(Boolean))) {
+        const references=await store.query("SELECT 1 FROM boji_message WHERE account_id=$1 AND (payload->>'photoUrl'=$2 OR payload->'photoUrls' ? $2) LIMIT 1",[this.accountId,'/api/media/'+id]);
         if (!references.rowCount) await store.query("UPDATE boji_media SET status='deleting' WHERE account_id=$1 AND id=$2",[this.accountId,id]);
       }
       return {date,deletedMeals:meals.length,deletedMessages:messages.length};
@@ -224,12 +225,13 @@ class CloudStore {
       const row=(await store.query("SELECT id FROM boji_media WHERE account_id=$1 AND id=$2 AND status='ready'",[this.accountId,id])).rows[0];
       if (!row) return false;
       const url='/api/media/'+id;
-      await store.query("UPDATE boji_message SET payload=jsonb_set(payload,'{photoUrl}','null'::jsonb) WHERE account_id=$1 AND payload->>'photoUrl'=$2",[this.accountId,url]);
+      const messages=(await store.query("SELECT id,payload FROM boji_message WHERE account_id=$1 AND (payload->>'photoUrl'=$2 OR payload->'photoUrls' ? $2)",[this.accountId,url])).rows;
+      for (const message of messages) await store.query('UPDATE boji_message SET payload=$3 WHERE account_id=$1 AND id=$2',[this.accountId,message.id,encoded(photos.withPhotoUrls(message.payload,photos.photoUrls(message.payload).filter(item=>item!==url)))]);
       await store.query("UPDATE boji_media SET status='deleting' WHERE account_id=$1 AND id=$2",[this.accountId,id]);
       return true;
     });
   }
-  async flushMediaGarbage(limit=5) {
+  async flushMediaGarbage(limit=6) {
     const rows=(await this.query("UPDATE boji_media SET status='deleting' WHERE (account_id,id) IN (SELECT account_id,id FROM boji_media WHERE account_id=$1 AND (status='deleting' OR (status='pending' AND created_at<clock_timestamp()-interval '15 minutes')) ORDER BY created_at LIMIT $2) RETURNING id,pathname",[this.accountId,limit])).rows;
     await Promise.all(rows.map(async row=>{
       try {
@@ -242,16 +244,17 @@ class CloudStore {
     const row=(await this.query('SELECT request_hash,result FROM boji_turn WHERE account_id=$1 AND request_id=$2',[this.accountId,requestId])).rows[0];
     return row?{hash:row.request_hash,result:row.result}:null;
   }
-  async commitTurn({requestId,requestHash,conversationDate,mealDate,text,image,imageDescription,source,result,reasoning,elapsedSeconds}) {
+  async commitTurn({requestId,requestHash,conversationDate,mealDate,text,image,images,imageDescription,source,result,reasoning,elapsedSeconds}) {
     conversationDate ||= await this.today();mealDate ||= conversationDate;
     const existing=await this.priorTurn(requestId);
     if (existing) {
       if (existing.hash!==requestHash) throw failure('请求 ID 已用于另一条消息。');
       return existing.result;
     }
-    const photo=image?await this.preparePhoto(image):null;
+    const preparedPhotos=[],inputPhotos=photos.validateImages(photos.inputImages({image,images}));
     let attached=false;
     try {
+      for (const url of inputPhotos) preparedPhotos.push(await this.preparePhoto(url));
       const response=await this.transaction(async store=>{
         const prior=await store.priorTurn(requestId);
         if (prior) {
@@ -276,8 +279,9 @@ class CloudStore {
         } else await store.query('DELETE FROM boji_clarification WHERE account_id=$1',[this.accountId]);
         const explicitMemory=/^(?:请)?记住[：:，, ]*(.+?)[。.!！]?$/u.exec(text)?.[1];
         if (explicitMemory&&!/[?？]|今天|这顿|刚才|本次/.test(explicitMemory)&&explicitMemory.length>=2&&explicitMemory.length<=200) await store.saveMemory(explicitMemory);
-        if (photo) {await store.attachPhoto(photo);attached=true;}
-        const userMessage={id:uid(),role:'user',text:text||'上传了一张食物照片',photoUrl:photo?.url||null,time:displayTime};
+        for (const photo of preparedPhotos) await store.attachPhoto(photo);
+        attached=true;
+        const userMessage=photos.withPhotoUrls({id:uid(),role:'user',text:text||`上传了 ${inputPhotos.length} 张食物照片`,time:displayTime},preparedPhotos.map(photo=>photo.url));
         const assistantMessage={id:uid(),role:'assistant',text:result.reply,receipt,revised,time:displayTime,live:true,reasoningText:reasoning||'',elapsedSeconds};
         if (receipt) {
           const dayMeals=await store.meals(mealDate),sum=totals(dayMeals);
@@ -291,19 +295,22 @@ class CloudStore {
         await store.query('INSERT INTO boji_turn(account_id,request_id,request_hash,completed_at,result) VALUES($1,$2,$3,$4,$5)',[this.accountId,requestId,requestHash,timestamp,encoded(committed)]);
         return committed;
       });
-      if (photo&&!attached) await this.discardPhoto(photo.id);
+      if (!attached) for (const photo of preparedPhotos) await this.discardPhoto(photo.id);
       return response;
-    } catch(error) {if (photo) await this.discardPhoto(photo.id).catch(()=>{});throw error;}
+    } catch(error) {for (const photo of preparedPhotos) await this.discardPhoto(photo.id).catch(()=>{});throw error;}
   }
   async exportData() {
     return this.readSnapshot(async store=>{
       const messages=await store.messages();
       for (const message of messages) {
-        const id=/^\/api\/media\/([a-f0-9-]{36})$/.exec(message.photoUrl||'')?.[1];
-        if (id) {
+        const urls=[];
+        for (const url of photos.photoUrls(message)) {
+          const id=/^\/api\/media\/([a-f0-9-]{36})$/.exec(url)?.[1];
+          if (!id) {urls.push(url);continue;}
           const photo=await store.readMedia(id);
-          message.photoUrl=photo?'data:'+photo.mime+';base64,'+photo.bytes.toString('base64'):null;
+          if (photo) urls.push('data:'+photo.mime+';base64,'+photo.bytes.toString('base64'));
         }
+        Object.assign(message,photos.withPhotoUrls(message,urls));
       }
       return {format:'boji-backup-v1',exportedAt:now(),profile:await store.profile(),meals:await store.meals(),messages,memories:await store.memories(),
         revisions:(await store.query('SELECT meal_id,changed_at,before_json,after_json,reason FROM boji_revision WHERE account_id=$1 ORDER BY changed_at',[this.accountId])).rows};
@@ -312,16 +319,18 @@ class CloudStore {
   async importData(backup,mode='all') {
     const {meals,messages,memories}=normalizeBackup(backup,mode,await this.today());
     if (mode!=='profile'&&!await this.profile()&&!(mode!=='records'&&backup.profile)) throw failure('请先建档，或选择同时导入档案。');
-    const photos=[];
+    const preparedPhotos=[];
     try {
       for (const {message} of messages) {
-        if (message.photoUrl?.startsWith('data:image/')) {
-          const exists=await this.query('SELECT 1 FROM boji_message WHERE account_id=$1 AND id=$2',[this.accountId,message.id]);
-          if (!exists.rowCount) {
-            const photo=await this.preparePhoto(message.photoUrl);photos.push(photo);
-            message.photoUrl=photo.url;
-          }
+        const inputPhotos=photos.photoUrls(message);
+        if (!inputPhotos.length) continue;
+        const exists=await this.query('SELECT 1 FROM boji_message WHERE account_id=$1 AND id=$2',[this.accountId,message.id]);
+        if (exists.rowCount) continue;
+        const urls=[];
+        for (const url of inputPhotos) {
+          const photo=await this.preparePhoto(url);preparedPhotos.push(photo);urls.push(photo.url);
         }
+        Object.assign(message,photos.withPhotoUrls(message,urls));
       }
       const result=await this.transaction(async store=>{
         if (mode!=='records'&&backup.profile) await store.saveProfile(backup.profile,backup.profile.timezone||backup.timezone);
@@ -341,11 +350,11 @@ class CloudStore {
             [this.accountId,message.id,date,timestamp,message.role,message.receipt?.id||null,encoded(message)]);
           messageCount+=inserted.rowCount;
         }
-        for (const photo of photos) await store.attachPhoto(photo);
+        for (const photo of preparedPhotos) await store.attachPhoto(photo);
         return {importedMeals:mealCount,importedMessages:messageCount,profileUpdated:mode!=='records'&&Boolean(backup.profile)};
       });
       return {...result,state:await this.state()};
-    } catch(error) {for (const photo of photos) await this.discardPhoto(photo.id).catch(()=>{});throw error;}
+    } catch(error) {for (const photo of preparedPhotos) await this.discardPhoto(photo.id).catch(()=>{});throw error;}
   }
 }
 module.exports={CloudStore};

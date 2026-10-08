@@ -29,8 +29,9 @@ test('real PostgreSQL adapters remain consistent across independent application 
   const port=await freePort();
   const pg=new EmbeddedPostgres({databaseDir:path.join(dir,'db'),user:'postgres',password,port,persistent:false,
     postgresFlags:['-h','127.0.0.1','-k',dir],onLog:()=>{},onError:()=>{}});
-  const dbs=[],apps=[],objects=new Map();let failDeletion=false,modelCalls=0,block;
-  const media={put:async(key,bytes)=>{objects.set(key,bytes);},get:async key=>objects.get(key)||null,
+  const dbs=[],apps=[],objects=new Map();let failDeletion=false,modelCalls=0,block,uploadCount=0,failUploadNumber=0;
+  const visionRequests=[];
+  const media={put:async(key,bytes)=>{if(++uploadCount===failUploadNumber)throw new Error('simulated Blob upload failure');objects.set(key,bytes);},get:async key=>objects.get(key)||null,
     del:async key=>{if(failDeletion) throw new Error('temporary storage failure');objects.delete(key);}};
   const outputs=[];
   try {
@@ -41,7 +42,7 @@ test('real PostgreSQL adapters remain consistent across independent application 
     for(const db of dbs) {
       const app=createAppServer({apiKey:'test-key',cloudDatabase:db,mediaStorage:media,modelConcurrency:1,fetchImpl:async(_url,init)=>{
         const body=JSON.parse(init.body);
-        if(body.model==='deepseek-flash') return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:'两个鸡蛋。'}]}]}));
+        if(body.model==='deepseek-flash') {visionRequests.push(body);return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:'两个鸡蛋。'}]}]}));}
         modelCalls++;if(block) await block;
         const result=outputs.shift()||turn();
         if(body.text?.format?.name==='manual_meal') return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}]}));
@@ -104,6 +105,47 @@ test('real PostgreSQL adapters remain consistent across independent application 
       await new CloudStore(dbs[0],firstId,media).flushMediaGarbage();assert.equal(objects.size,0);
       assert.equal((await call(0,'/api/state',{user:first})).data.messages.length,0);
       assert.equal((await call(0,'/api/chat',{method:'POST',user:first,body})).data.deleted,true);
+    });
+    await t.test('six-photo message survives export/import, isolates users and deletes individual or all photos',async()=>{
+      const multi={requestId:'cloud-six-photos-01',text:'刚吃了这餐，照片是不同角度',images:Array(6).fill(photo)};
+      const beforeVision=visionRequests.length;outputs.push(turn('consumed',egg));
+      assert.match((await call(0,'/api/chat',{method:'POST',user:first,body:multi})).data,/event: result/);
+      let state=(await call(1,'/api/state',{user:first})).data;
+      const urls=state.messages[0].photoUrls;assert.equal(urls.length,6);assert.equal(objects.size,6);
+      assert.equal(state.meals.length,1);assert.equal(state.today.calories,150);
+      assert.equal(visionRequests.length,beforeVision+1);
+      assert.equal(visionRequests.at(-1).input[0].content.filter(item=>item.type==='input_image').length,6);
+      assert.equal((await call(1,'/api/chat',{method:'POST',user:first,body:multi})).data.replayed,true);
+      assert.equal(objects.size,6);assert.equal(visionRequests.length,beforeVision+1);
+      for(const url of urls)assert.equal((await call(1,url,{user:second})).status,404);
+      const backup=(await call(1,'/api/export',{user:first})).data;
+      assert.deepEqual(backup.messages[0].photoUrls,Array(6).fill(photo));
+      assert.equal((await call(0,urls[0],{method:'DELETE',user:first})).status,200);
+      state=(await call(1,'/api/state',{user:first})).data;
+      assert.deepEqual(state.messages[0].photoUrls,urls.slice(1));assert.equal(state.messages[0].photoUrl,urls[1]);
+      assert.equal((await call(1,urls[0],{user:first})).status,404);
+      assert.equal((await call(0,'/api/import',{method:'POST',user:second,body:{backup,mode:'records'}})).status,200);
+      const restored=(await call(1,'/api/state',{user:second})).data.messages[0].photoUrls;
+      assert.equal(restored.length,6);
+      for(const url of restored)assert.equal((await call(1,url,{user:second})).status,200);
+      for(const user of [first,second])assert.equal((await call(0,'/api/history/'+today,{method:'DELETE',user})).status,200);
+      await new CloudStore(dbs[0],firstId,media).flushMediaGarbage();await new CloudStore(dbs[0],secondId,media).flushMediaGarbage();
+      assert.equal(objects.size,0);
+    });
+    await t.test('second Blob upload failure leaves no half-turn and retry saves the complete batch',async()=>{
+      const body={requestId:'cloud-batch-failure-01',text:'刚吃了两个鸡蛋',images:[photo,photo]};
+      failUploadNumber=uploadCount+2;outputs.push(turn('consumed',egg));
+      const response=await call(0,'/api/chat',{method:'POST',user:first,body});
+      assert.match(response.data,/event: error/);failUploadNumber=0;
+      const store=new CloudStore(dbs[0],firstId,media);
+      assert.equal((await store.meals()).length,0);assert.equal((await store.messages()).length,0);
+      assert.equal(await store.priorTurn(body.requestId),null);
+      await store.flushMediaGarbage();assert.equal(objects.size,0);
+      outputs.push(turn('consumed',egg));
+      assert.match((await call(1,'/api/chat',{method:'POST',user:first,body})).data,/event: result/);
+      assert.equal((await store.messages())[0].photoUrls.length,2);assert.equal(objects.size,2);
+      assert.equal((await call(1,'/api/history/'+today,{method:'DELETE',user:first})).status,200);
+      await store.flushMediaGarbage();assert.equal(objects.size,0);
     });
     await t.test('shared leases serialize users, enforce global concurrency and recover after failure',async()=>{
       let finish;block=new Promise(resolve=>{finish=resolve;});

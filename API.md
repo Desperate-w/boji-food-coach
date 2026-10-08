@@ -30,7 +30,7 @@
 | `GET /api/history/:date` | 返回 `{day}`，包含该日餐食、完整交流和思考文本；无记录返回 404。 |
 | `GET /healthz` | 公开存活检查，只返回 `{ok:true}`，不暴露用户、模型或配置。 |
 | `PUT /api/profile` | 请求 `{profile, timezone}`；服务端验证输入、计算计划并生成新版本；返回 `{profile, state}`。 |
-| `POST /api/chat` | 请求 `{requestId, text, image?, source?, targetMealId?}`。`requestId` 为 8–80 位字母、数字或连字符；`image` 为压缩后的 JPEG/PNG/WebP data URL。 |
+| `POST /api/chat` | 请求 `{requestId, text, images?, image?, source?, targetMealId?}`。`requestId` 为 8–80 位字母、数字或连字符；`images` 为最多 6 张压缩 JPEG/PNG/WebP data URL 的数组；兼容旧 `image` 单张字段，不能与 `images` 同时携带有效图片。 |
 | `POST /api/meals` | 在 History 手动补记。请求 `{date, type, description}`；`type` 为早餐、午餐、晚餐或加餐，`description` 是食物名称和份量。DeepSeek V4 Pro 估算食物项，服务端校验后保存，返回 `{meal, state}`。 |
 | `PUT /api/meals/:id` | 在 History 修改已有餐食。请求 `{type, description}`；沿用原记录日期，重新估算并保存修订，返回 `{meal, state}`。 |
 | `DELETE /api/meals/:id` | 删除单餐及其食物项、修订；原对话保留并标记该餐已删除，返回 `{deleted, state}`。不调用模型。 |
@@ -45,7 +45,11 @@
 
 `POST /api/chat` 首次处理时返回 SSE：`status`（`thinking` / `composing`）、`reasoning`（本轮实际思考文本）、`result`（验证并提交后的 `{result, reasoning, assistantMessage, receipt, revised, state, requestId}`）或 `error`。重复的 `requestId` 和相同输入返回 JSON，字段相同且 `replayed=true`，不会重复记餐；同一 ID 携带不同输入返回 409。客户端在断流后应先查询 `GET /api/turn/:requestId`，再用原 ID 重试。
 
-`result.action` 为 `consumed`、`planned`、`question`、`correction`、`clarify` 之一。只有 `consumed` 或目标明确的 `correction` 可更改餐食。模型内部的 `occurred_on` 可标注明确的过去日期；服务端再次核对文字并限制补记范围。过去日期餐食进入对应 History，当天发起的交流留在当天。近七天数据由服务端先汇总，再提供给模型解释。服务端校验食物项、营养数值及整餐合计；每日汇总从餐食重算。未建档返回 409；输入无效返回 400；图片过大返回 413；未配置密钥返回 503；模型错误以相应状态码或 SSE `error` 返回。
+多图与文字合并为同一轮，一次调用 Flash 理解所有照片后交给 V4 Pro。图片顺序参与请求去重。单张解码最多 1,200,000 字节，合计最多 2,700,000 字节；聊天 JSON 请求体最多 4,000,000 字节。浏览器自动把每张压缩到 450,000 字节以内。数量、格式和图片大小校验失败返回 400，请求体超限返回 413，均不调用模型。
+
+用户交流记录增加 `photoUrls: string[]`，`photoUrl` 镜像第一张供旧版兼容；读取旧记录时仅有 `photoUrl` 也有效。删除单张只移除对应 URL，删除第一张自动提升下一张；文字和营养记录保留。备份中的 `photoUrls` 内嵌全部图片 data URL，保留 `boji-backup-v1` 格式兼容旧单图导入。多图上传失败不会提交餐食或半条交流，云端已上传附件进入待清理队列。
+
+`result.action` 为 `consumed`、`planned`、`question`、`correction`、`clarify` 之一。只有 `consumed` 或目标明确的 `correction` 可更改餐食。模型内部的 `occurred_on` 可标注明确的过去日期；服务端再次核对文字并限制补记范围。过去日期餐食进入对应 History，当天发起的交流留在当天。近七天数据由服务端先汇总，再提供给模型解释。服务端校验食物项、营养数值及整餐合计；每日汇总从餐食重算。未建档返回 409；输入或图片无效返回 400；请求体过大返回 413；未配置密钥返回 503；模型错误以相应状态码或 SSE `error` 返回。
 
 History 手动餐食接口只接受过去一年内的有效日期。用户选定的餐次优先于模型推断；修改保留原日期与餐食 ID，不新增对话消息。保存成功后的 `state` 是当前营养与目标进度的权威结果；前端立即替换显示。手动填写的食物描述会发送给 DeepSeek 估算，未配置密钥时接口返回 503。
 

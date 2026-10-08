@@ -1,3 +1,4 @@
+const photos=require('./photos.js');
 const crypto=require('node:crypto');
 const fields=['calories','protein','carbs','fat','fiber'];
 const uid=()=>crypto.randomUUID();
@@ -35,7 +36,7 @@ function normalizeBackup(backup,mode,today) {
     const date=safeDate(source.date)||backupDate;
     const message={id:typeof source.id==='string'&&/^[\w-]{1,80}$/.test(source.id)?source.id:uid(),role:source.role,text:source.text,time:typeof source.time==='string'?source.time.slice(0,30):''};
     if (typeof source.reasoningText==='string') message.reasoningText=source.reasoningText.slice(0,30000);
-    if (typeof source.photoUrl==='string'&&/^data:image\/(jpeg|png|webp);base64,/.test(source.photoUrl)&&source.photoUrl.length<1_600_000) message.photoUrl=source.photoUrl;
+    Object.assign(message,photos.withPhotoUrls(message,photos.backupPhotoUrls(source)));
     if (source.receipt && typeof source.receipt==='object') message.receipt=source.receipt;
     if (source.revised===true) message.revised=true;
     if (source.recordDeleted===true) message.recordDeleted=true;

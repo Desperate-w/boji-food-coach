@@ -56,6 +56,56 @@ test('profile and meals are saved; retries do not duplicate a recorded meal',asy
   assert.equal(calls.length,1);
 }));
 
+test('multi-image turn uses one vision call, preserves every photo and supports backup and selective deletion',async()=>withServer(async({request,outputs,calls})=>{
+  await request('/api/profile','PUT',{profile});
+  const image='data:image/png;base64,'+Buffer.from('fake-image').toString('base64');
+  const body={requestId:'multi-photo-turn-01',text:'刚吃了这餐，这两张是不同角度',images:[image,image]};
+  outputs.push(turn('consumed',egg));
+  assert.equal((await request('/api/chat','POST',body)).status,200);
+  let state=(await request('/api/state')).payload;
+  const urls=state.messages[0].photoUrls;
+  assert.equal(urls.length,2);assert.equal(state.messages[0].photoUrl,urls[0]);
+  assert.equal(state.meals.length,1);assert.equal(state.today.calories,150);
+  assert.equal(calls.length,2);assert.equal(calls[0].input[0].content.filter(item=>item.type==='input_image').length,2);
+  assert.equal((await request('/api/chat','POST',body)).payload.replayed,true);assert.equal(calls.length,2);
+  const backup=(await request('/api/export')).payload;
+  assert.deepEqual(backup.messages[0].photoUrls,[image,image]);
+  await request(urls[0],'DELETE');
+  state=(await request('/api/state')).payload;
+  assert.deepEqual(state.messages[0].photoUrls,[urls[1]]);assert.equal(state.messages[0].photoUrl,urls[1]);
+  assert.equal((await request(urls[0])).status,404);assert.equal((await request(urls[1])).status,200);
+  await request('/api/history/'+state.activeDate,'DELETE');
+  assert.equal((await request(urls[1])).status,404);
+  // Replay tombstones stay intact, while an explicit personal backup can restore all photos.
+  assert.equal((await request('/api/import','POST',{backup,mode:'records'})).status,200);
+  state=(await request('/api/state')).payload;
+  assert.equal(state.messages[0].photoUrls.length,2);
+  for(const url of state.messages[0].photoUrls)assert.equal((await request(url)).status,200);
+}));
+
+test('invalid multi-image input never invokes the model or writes records',async()=>withServer(async({request,calls})=>{
+  await request('/api/profile','PUT',{profile});
+  const image='data:image/png;base64,'+Buffer.from('fake-image').toString('base64');
+  for(const data of [{images:Array(7).fill(image)},{images:'bad'},{images:[image],image},{images:['data:image/png;base64,=bad']},
+    {images:Array(3).fill('data:image/png;base64,'+Buffer.alloc(950_000).toString('base64'))}]) {
+    const response=await request('/api/chat','POST',{requestId:'invalid-multi-01',text:'刚吃完',...data});
+    assert.equal(response.status,400,JSON.stringify(response.payload));
+  }
+  assert.equal(calls.length,0);assert.equal((await request('/api/state')).payload.messages.length,0);
+}));
+
+test('SQLite second-photo save failure rolls back the complete turn and all new files',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'boji-multi-rollback-')),store=new Store(path.join(dir,'boji.sqlite'));
+  try {
+    store.saveProfile(profile);const save=store.savePhoto.bind(store);let count=0;
+    store.savePhoto=url=>{if(++count===2)throw new Error('simulated disk failure');return save(url);};
+    const image='data:image/png;base64,'+Buffer.from('fake-image').toString('base64');
+    assert.throws(()=>store.commitTurn({requestId:'rollback-multi-01',requestHash:'same',text:'刚吃了',images:[image,image],source:'photo',result:turn('consumed',egg)}),/disk failure/);
+    assert.equal(store.state().meals.length,0);assert.equal(store.state().messages.length,0);assert.equal(store.priorTurn('rollback-multi-01'),null);
+    assert.equal(store.db.prepare('SELECT count(*) AS n FROM media').get().n,0);assert.deepEqual(fs.readdirSync(store.mediaDir),[]);
+  } finally {store.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
 test('saved profile and meal survive reopening the database',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'boji-reopen-'));
   const filename=path.join(dir,'boji.sqlite');
