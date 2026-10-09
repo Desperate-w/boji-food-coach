@@ -82,4 +82,8 @@ vercel deploy --prod --yes
 
 每条消息最多 6 张照片，浏览器将单张压缩至 450 KB 内，整条聊天 JSON 限制 4 MB，低于 [Vercel Functions 的 4.5 MB 限制](https://vercel.com/docs/functions/limitations)。通过原有私有 Blob 和 PostgreSQL 保存，无需新增服务或迁移数据库结构。主模型仍为 V4 Pro，照片联合识别为 Flash；新增 `photos.js` 已加入静态构建和函数文件清单。
 
-本地 48 项回归与 11 项 PostgreSQL/私有 Blob 测试通过，覆盖 6 图、单图兼容、失败重试、整批回滚、跨账号隔离、删除与备份恢复。公网部署与真实模型验收待完成。
+本地 48 项回归与 11 项 PostgreSQL/私有 Blob 测试通过，覆盖 6 图、单图兼容、失败重试、整批回滚、跨账号隔离、删除与备份恢复。生产部署 `dpl_J6qPeeZnqszbmBkH3kFmr3d3xM7F` 状态 Ready，继续使用 https://boji-food-coach.vercel.app；代码提交 `934018d`。
+
+相同服务代码通过本机 HTTP 入口连接真实 Neon、私有 Blob 和 DeepSeek：一次六图 `deepseek-flash` 联合识别，再由 `deepseek-v4-pro` 回复，逐一描述六种颜色棋盘图，未误计饮食；六张完整保存/读取/备份、去重、单张删除与整日清理通过。临时测试账号、凭据和照片已清理，真实用户数据和全站模型计费记录保留。
+
+浏览器隔离预览实际选择两张再追加四张，文字说明保留；六图缩略图横向滚动，实际 278px 窄屏页面宽度与滚动宽度相同，无横向溢出。生产网址最终登录后浏览器复测因本机网络/浏览器导航超时未完成，保留 B9-06；不将本机真实云存储验收等同于公网浏览器验收。
