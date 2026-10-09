@@ -28,7 +28,7 @@ function openComposer({live=false,oversized=false}={}) {
   vm.runInContext(fs.readFileSync(__dirname+'/nutrition.js','utf8'),context);
   storage.value=JSON.stringify({onboardingComplete:true,profile:{...profile,...context.window.BojiNutrition.calculate(profile)},meals:[],messages:[]});
   for(const file of ['photos.js','app.js'])vm.runInContext(fs.readFileSync(__dirname+'/'+file,'utf8'),context);
-  return {app,sent,storage,reads:()=>reads,encodes:()=>encodes,
+  return {app,sent,storage,input,handlers,reads:()=>reads,encodes:()=>encodes,
     select:files=>handlers['photo-change']({target:{files}}),
     click:(action,index)=>handlers.click({target:{closest(){return {dataset:{action,...(typeof index==='object'?index:{index})}};}}}),
     send:text=>{input.value=text;handlers.submit({target:{id:'chat-form'},preventDefault(){}});}};
@@ -74,4 +74,22 @@ test('image bounds reject seven images, oversized batches and malformed base64; 
   const big='data:image/jpeg;base64,'+Buffer.alloc(1_000_000).toString('base64');
   assert.throws(()=>photos.validateImages([big,big,big]),/总大小/);
   assert.throws(()=>photos.validateImages(['data:image/png;base64,====']),/格式/);
+});
+
+
+test('Enter and Shift+Enter stay in the composer; Ctrl/Cmd+Enter sends complete multiline text after IME commits',async()=>{
+  for(const modifier of ['ctrlKey','metaKey']) {
+    const ui=openComposer({live:true});await settle();
+    ui.input.id='message-input';ui.input.value='早餐：两个鸡蛋\n午餐：一碗米饭\n米饭只吃了一半';
+    let prevented=0;
+    const key=extra=>ui.handlers.keydown({target:ui.input,key:'Enter',preventDefault(){prevented++;},...extra});
+    key({});key({shiftKey:true});
+    assert.equal(prevented,0);assert.equal(ui.sent.length,0);
+    key({[modifier]:true,isComposing:true});key({[modifier]:true,keyCode:229});
+    ui.handlers.compositionstart({target:ui.input});key({[modifier]:true});
+    assert.equal(prevented,0);assert.equal(ui.sent.length,0);
+    ui.handlers.compositionend({target:ui.input});key({[modifier]:true});await settle();
+    assert.equal(prevented,1);assert.equal(ui.sent.length,1);assert.equal(ui.sent[0].text,ui.input.value);
+    assert.match(ui.app.innerHTML,/早餐：两个鸡蛋\n午餐：一碗米饭\n米饭只吃了一半/);
+  }
 });

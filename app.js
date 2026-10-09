@@ -94,6 +94,8 @@
   let reasoningRenderTimer;
   let voiceRecognition=null;
   let liveController=null;
+  let composerObserver=null;
+  let composerComposing=false;
   function scheduleReasoningRender() {
     if (reasoningRenderTimer) return;
     reasoningRenderTimer=setTimeout(()=>{reasoningRenderTimer=null;if(state.pending) render();},120);
@@ -192,32 +194,31 @@
     const content=m.reasoningText||m.reasoningSummary
       ? renderRichText(m.reasoningText||m.reasoningSummary)
       : '<p>本次模型没有返回可展示的思考文本。</p>';
-    return `<details class="reasoning-details"><summary>${m.elapsedSeconds!=null?`思考了 ${m.elapsedSeconds} 秒 · `:''}查看${legacySummary?'思考摘要':'思考过程'} ${icon('down')}</summary><div class="reasoning-content">${content}<small>${legacySummary?'这是之前模型提供的思考摘要。':'这里显示 DeepSeek 本轮实际返回的思考文本。'}</small></div></details>`;
+    return `<details class="reasoning-details"><summary><span class="reasoning-mark">${icon('spark')}</span><span>${legacySummary?'思考摘要':'思考过程'}</span>${m.elapsedSeconds!=null?`<span class="reasoning-duration">${m.elapsedSeconds} 秒</span>`:''}<span class="reasoning-disclosure"><span class="reasoning-expand-label">展开</span><span class="reasoning-collapse-label">收起</span> ${icon('down')}</span></summary><div class="reasoning-content">${content}<small>${legacySummary?'这是之前模型提供的思考摘要。':'这里显示 DeepSeek 本轮实际返回的思考文本。'}</small></div></details>`;
   }
   function renderMessage(m, showEdit=true) {
     if (m.role==='user') {
       const urls=photos.photoUrls(m);
       return `<article class="message user"><div class="user-bubble">${urls.length?`<div class="message-photos ${urls.length===1?'single':''}">${urls.map((url,index)=>`<figure><img class="user-photo" src="${escapeHtml(url)}" alt="饮食照片 ${index+1}" loading="lazy">${state.connection.mode==='live'&&/^\/api\/media\/[a-f0-9-]{36}$/.test(url)?`<button class="photo-delete" data-action="delete-photo" data-id="${url.slice('/api/media/'.length)}" aria-label="删除第 ${index+1} 张照片">删除照片${urls.length>1?` ${index+1}`:''}</button>`:''}</figure>`).join('')}</div>`:''}${escapeHtml(m.text||`上传了 ${urls.length} 张食物照片`)}${m.recordDeleted?'<small class="deleted-record-tag">关联餐食已删除</small>':''}</div></article>`;
     }
-    return `<article class="message assistant"><div class="assistant-message"><div class="assistant-avatar">${icon('spark')}</div><div class="assistant-body">${renderRichText(m.text)}${m.receipt?renderReceipt(m.receipt,m.revised,showEdit):''}${m.after?renderRichText(m.after):''}${renderReasoning(m)}<div class="message-meta">${escapeHtml(m.time||'刚刚')}</div></div></div></article>`;
+    return `<article class="message assistant"><div class="assistant-message"><div class="assistant-avatar">${icon('spark')}</div><div class="assistant-body">${renderRichText(m.text)}${m.receipt?renderReceipt(m.receipt,m.revised,showEdit):''}${m.after?renderRichText(m.after):''}<div class="message-meta">${escapeHtml(m.time||'刚刚')}</div></div></div>${renderReasoning(m)}</article>`;
   }
   function renderComposer() {
     const disabled=state.pending||state.photoPreparing?'disabled':'';
     const hint=state.connection.mode==='live'
       ? `由 ${escapeHtml(state.connection.model)} 回复；营养数据仍是估算值`
       : state.connection.mode==='unavailable'?'无法连接本地服务；刷新页面重试':state.connection.mode==='preview'?'对话为本地模拟；个人计划按填写资料实时估算':'当前为本地模拟回复；启动服务并配置 API Key 后可体验真实模型';
-    return `<div class="composer-wrap"><div class="composer-inner"><div class="composer-menu ${state.menuOpen?'open':''}" id="composer-menu"><button data-action="open-photo">${icon('camera')} 拍照或选择照片</button><button data-action="voice-demo">${icon('mic')} 语音输入</button></div>
+    return `<div class="composer-wrap" id="composer-wrap"><div class="composer-inner"><div class="composer-menu ${state.menuOpen?'open':''}" id="composer-menu"><button data-action="open-photo">${icon('camera')} 拍照或选择照片</button><button data-action="voice-demo">${icon('mic')} 语音输入</button></div>
       <div class="attachment-preview ${state.attachments.length||state.photoPreparing?'visible':''}" aria-busy="${state.photoPreparing}">
         <div class="attachment-heading" aria-live="polite"><strong>${state.photoPreparing?'正在处理照片…':`${state.attachments.length} / ${photos.MAX_PHOTOS} 张照片`}</strong><span>一起发送，可补充份量和餐次</span></div>
         <div class="attachment-strip">${state.attachments.map((photo,index)=>`<figure class="attachment-item"><img src="${escapeHtml(photo.url)}" alt="待发送照片 ${index+1}：${escapeHtml(photo.name)}"><span class="attachment-number">${index+1}</span><button type="button" data-action="remove-photo" data-index="${index}" aria-label="移除第 ${index+1} 张照片" ${disabled}>${icon('close')}</button></figure>`).join('')}${state.attachments.length<photos.MAX_PHOTOS?`<button type="button" class="attachment-add" data-action="open-photo" aria-label="继续添加照片" ${disabled}>${icon('plus')}<span>继续添加</span></button>`:''}</div>
       </div>
-      <form class="composer" id="chat-form"><button class="composer-button" type="button" data-action="toggle-menu" aria-label="添加照片或语音" aria-expanded="${state.menuOpen}" ${disabled}>${icon('plus')}</button><textarea id="message-input" rows="1" placeholder="说说吃了什么，或问我怎么吃…" aria-label="输入消息" ${disabled}>${escapeHtml(state.draft||'')}</textarea><button class="composer-button" type="button" data-action="voice-demo" aria-label="语音输入" ${disabled}>${icon('mic')}</button><button class="composer-button send" type="submit" aria-label="发送消息" ${disabled}>${icon('send')}</button></form><div class="composer-hint">${hint}</div></div></div>`;
+      <form class="composer" id="chat-form"><textarea id="message-input" rows="1" placeholder="说说吃了什么，或问我怎么吃…" aria-label="输入消息" aria-describedby="composer-shortcuts" enterkeyhint="enter" ${disabled}>${escapeHtml(state.draft||'')}</textarea><div class="composer-toolbar"><div class="composer-tools"><button class="composer-button" type="button" data-action="toggle-menu" aria-label="添加照片或语音" aria-expanded="${state.menuOpen}" ${disabled}>${icon('plus')}</button><button class="composer-button" type="button" data-action="voice-demo" aria-label="语音输入" ${disabled}>${icon('mic')}</button></div><span class="composer-shortcuts" id="composer-shortcuts">Enter 换行<span> · Ctrl / ⌘ + Enter 发送</span></span><button class="composer-button send" type="submit" aria-label="发送消息" ${disabled}>${icon('send')}</button></div></form><div class="composer-hint">${hint}</div></div></div>`;
   }
   function renderPending() {
     const pending=state.pending;
-    const label=pending.phase==='composing'?'正在整理回答…':'模型正在思考…';
-    const reasoning=`<button class="thinking-expand" data-action="toggle-pending-reasoning" aria-expanded="${pending.reasoningOpen}">${pending.reasoning?'查看思考过程':'思考过程生成中'} ${icon('down')}</button>${pending.reasoningOpen?`<div class="reasoning-content pending-summary">${pending.reasoning?renderRichText(pending.reasoning):'<p>模型尚未返回思考文本。</p>'}</div>`:''}`;
-    return `<section class="thinking-panel" aria-live="polite"><div class="thinking-row"><span class="thinking-pulse" aria-hidden="true"><i></i><i></i><i></i></span><strong>${label}</strong><span class="thinking-seconds" id="thinking-seconds">${Math.floor((Date.now()-pending.startedAt)/1000)} 秒</span></div><p>正在结合你的今日记录和目标给出建议。</p>${reasoning}<button class="stop-live" data-action="stop-live">停止生成</button></section>`;
+    const label=pending.phase==='composing'?'正在整理回答':'模型正在思考';
+    return `<section class="thinking-panel" aria-label="模型思考"><div class="thinking-row" role="status"><span class="thinking-pulse" aria-hidden="true"><i></i><i></i><i></i></span><strong>${label}</strong><span class="thinking-seconds" id="thinking-seconds">${Math.floor((Date.now()-pending.startedAt)/1000)} 秒</span></div><p>正在结合你的今日记录和目标给出建议。</p><div class="thinking-actions"><button class="thinking-expand" data-action="toggle-pending-reasoning" aria-expanded="${pending.reasoningOpen}" aria-controls="pending-reasoning">${pending.reasoningOpen?'收起思考过程':pending.reasoning?'查看思考过程':'思考过程生成中'} ${icon('down')}</button><button class="stop-live" data-action="stop-live">停止生成</button></div>${pending.reasoningOpen?`<div class="reasoning-content pending-summary" id="pending-reasoning" tabindex="0" aria-label="思考过程">${pending.reasoning?renderRichText(pending.reasoning):'<p>模型尚未返回思考文本。</p>'}</div>`:''}</section>`;
   }
   function renderChat() {
     const response=state.pending?renderPending():state.requestError
@@ -225,7 +226,7 @@
       : state.currentFeedback
         ? `<section class="feedback-panel" aria-live="polite"><div class="feedback-heading"><span class="eyebrow">刚刚的反馈</span><button class="text-button" data-action="dismiss-feedback">收起</button></div>${renderMessage(state.currentFeedback)}</section>`
         : `<section class="welcome-block"><div class="eyebrow">随手记录</div><h2>吃完，告诉我就好。</h2><p>拍几张照、说一句话，或者直接问下一顿怎么吃。</p></section>`;
-    return `<div class="page chat-page wide-page ${state.attachments.length||state.photoPreparing?'has-attachments':''}">${renderTopbar()}<main class="chat-scroll" id="chat-scroll"><div class="content-column today-content">${renderToday()}<div class="conversation-column">${response}<div class="suggestions"><button class="suggestion" data-action="example" data-text="刚吃了两个鸡蛋">试试记录：刚吃了两个鸡蛋</button><button class="suggestion" data-action="example" data-text="我晚上还能吃麦当劳吗？">问问：今晚还能吃麦当劳吗？</button>${state.meals.length?`<button class="suggestion" data-action="example" data-text="米饭其实只吃了一半">修正：米饭只吃了一半</button>`:''}</div>${state.meals.length||state.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的饮食与交流记录 ${icon('chevron')}</button>`:''}</div></div></main>${renderComposer()}</div>`;
+    return `<div class="page chat-page wide-page ${state.attachments.length||state.photoPreparing?'has-attachments':''}">${renderTopbar()}<main class="chat-scroll" id="chat-scroll"><div class="content-column today-content">${renderToday()}<div class="chat-response">${response}</div><div class="conversation-column"><div class="suggestions"><button class="suggestion" data-action="example" data-text="刚吃了两个鸡蛋">试试记录：刚吃了两个鸡蛋</button><button class="suggestion" data-action="example" data-text="我晚上还能吃麦当劳吗？">问问：今晚还能吃麦当劳吗？</button>${state.meals.length?`<button class="suggestion" data-action="example" data-text="米饭其实只吃了一半">修正：米饭只吃了一半</button>`:''}</div>${state.meals.length||state.messages.length?`<button class="history-inline-link" data-action="history-day" data-day="today">查看今天的饮食与交流记录 ${icon('chevron')}</button>`:''}</div></div></main>${renderComposer()}</div>`;
   }
 
   function historyFor(day) {
@@ -342,7 +343,26 @@
     if (state.modal!=='onboarding') return '';
     return renderSetup(true);
   }
+  function syncComposerLayout() {
+    const input=document.getElementById('message-input');
+    if (!input?.style || typeof window.getComputedStyle!=='function') return;
+    const style=window.getComputedStyle(input);
+    const minHeight=parseFloat(style.minHeight)||40,maxHeight=parseFloat(style.maxHeight)||240;
+    input.style.height='auto';
+    input.style.height=`${Math.max(minHeight,Math.min(input.scrollHeight,maxHeight))}px`;
+    input.style.overflowY=input.scrollHeight>maxHeight?'auto':'hidden';
+    const wrap=document.getElementById('composer-wrap'),scroll=document.getElementById('chat-scroll');
+    if (wrap&&scroll?.style) {
+      const space=`${Math.ceil(wrap.getBoundingClientRect().height)+24}px`;
+      scroll.style.paddingBottom=space;
+      scroll.style.setProperty('--composer-space',space);
+    }
+  }
   function render() {
+    const chatScroll=document.getElementById('chat-scroll'),oldScrollTop=chatScroll?.scrollTop;
+    const thought=document.getElementById('pending-reasoning');
+    const oldThought=thought?{top:thought.scrollTop,follow:thought.scrollHeight-thought.clientHeight-thought.scrollTop<32}:null;
+    composerObserver?.disconnect();composerObserver=null;
     if (state.connection.mode==='checking' && /^https?:$/.test(window.location?.protocol||'')) {
       app.innerHTML='<div class="boot-screen" role="status"><span class="boot-mark">✦</span><span>正在读取你的记录…</span></div>';
       return;
@@ -350,14 +370,30 @@
     app.innerHTML=state.onboardingComplete
       ? `<div class="app-shell">${renderSidebar()}<div class="main">${state.view==='chat'?renderChat():state.view==='history'?renderHistory():renderProfile()}</div></div>${renderMobileNav()}${renderModal()}<div class="toast" id="toast" role="status"></div>`
       : renderSetup()+(state.modal==='import'?renderModal():'');
+    syncComposerLayout();
+    const newScroll=document.getElementById('chat-scroll'),newThought=document.getElementById('pending-reasoning');
+    if (newScroll&&oldScrollTop!=null) newScroll.scrollTop=oldScrollTop;
+    if (newThought&&oldThought) newThought.scrollTop=oldThought.follow?newThought.scrollHeight:oldThought.top;
+    const wrap=document.getElementById('composer-wrap');
+    if (wrap&&window.ResizeObserver) {composerObserver=new window.ResizeObserver(syncComposerLayout);composerObserver.observe(wrap);}
     persist();
   }
+  window.addEventListener('resize',syncComposerLayout);
+  window.visualViewport?.addEventListener('resize',syncComposerLayout);
   function toast(message) {
     const el=document.getElementById('toast'); if (!el) return;
     clearTimeout(toastTimer); el.textContent=message; el.classList.add('visible');
     toastTimer=setTimeout(()=>el.classList.remove('visible'),2500);
   }
   function scrollBottom() { requestAnimationFrame(()=>{const el=document.getElementById('chat-scroll'); if (el) el.scrollTop=el.scrollHeight;}); }
+  function revealChatPanel(panel) {
+    requestAnimationFrame(()=>{
+      const scroll=document.getElementById('chat-scroll'),wrap=document.getElementById('composer-wrap');
+      if (!panel||!scroll||!wrap) return;
+      const overlap=panel.getBoundingClientRect().bottom-wrap.getBoundingClientRect().top+12;
+      if (overlap>0) scroll.scrollTop+=overlap;
+    });
+  }
   function updateComposerPhoto() { render(); requestAnimationFrame(()=>document.getElementById('message-input')?.focus()); }
   function browserBackup() {
     const meals=state.meals.map(meal=>({...meal,date:state.activeDate}));
@@ -743,7 +779,10 @@
     else if (action==='delete-confirm') await deleteRecord();
     else if (action==='expand-today') {state.expanded=!state.expanded;render();}
     else if (action==='dismiss-feedback') {state.currentFeedback=null;render();}
-    else if (action==='toggle-pending-reasoning' && state.pending) {state.pending.reasoningOpen=!state.pending.reasoningOpen;render();}
+    else if (action==='toggle-pending-reasoning' && state.pending) {
+      state.pending.reasoningOpen=!state.pending.reasoningOpen;render();
+      if (state.pending.reasoningOpen) revealChatPanel(document.querySelector('.thinking-panel'));
+    }
     else if (action==='stop-live') liveController?.abort();
     else if (action==='retry-live') sendMessage(state.draft,state.attachments,{requestId:state.retryRequestId,source:state.retrySource});
     else if (action==='toggle-menu') {state.menuOpen=!state.menuOpen;document.getElementById('composer-menu')?.classList.toggle('open',state.menuOpen);button.setAttribute('aria-expanded',String(state.menuOpen));}
@@ -817,7 +856,7 @@
   });
   document.addEventListener('submit', e => { if (e.target.id==='chat-form') {e.preventDefault();sendMessage(document.getElementById('message-input').value);} else if (e.target.id==='meal-form') {e.preventDefault();saveMealDraft();} });
   document.addEventListener('input', e => {
-    if (e.target.id==='message-input') state.draft=e.target.value;
+    if (e.target.id==='message-input') {state.draft=e.target.value;syncComposerLayout();}
     if (e.target.id==='meal-description'&&state.mealDraft) state.mealDraft.description=e.target.value;
     if (e.target.id==='memory-text') state.memoryDraft=e.target.value;
     if (e.target.id==='voice-transcript') {state.voiceTranscript=e.target.value;const use=document.querySelector('[data-action="voice-use"]');if (use) use.disabled=!state.voiceTranscript.trim();}
@@ -828,7 +867,16 @@
     if (e.target.id==='ob-gender') {state.onboardingDraft.gender=e.target.value;persist();}
     if (e.target.id==='meal-type'&&state.mealDraft) state.mealDraft.type=e.target.value;
   });
-  document.addEventListener('keydown', e => { if (e.target.id==='message-input'&&e.key==='Enter'&&!e.shiftKey) {e.preventDefault();sendMessage(e.target.value);} });
+  document.addEventListener('compositionstart',e=>{if(e.target.id==='message-input')composerComposing=true;});
+  document.addEventListener('toggle',e=>{
+    if (e.target.open&&e.target.matches?.('.chat-response .reasoning-details')) revealChatPanel(e.target.closest('.feedback-panel'));
+  },true);
+  document.addEventListener('compositionend',e=>{if(e.target.id==='message-input'){composerComposing=false;state.draft=e.target.value;syncComposerLayout();}});
+  document.addEventListener('keydown',e=>{
+    if(e.target.id==='message-input'&&e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&!e.isComposing&&!composerComposing&&e.keyCode!==229) {
+      e.preventDefault();sendMessage(e.target.value);
+    }
+  });
   function preparePhoto(file) {
     return new Promise((resolve, reject) => {
       if (!file.type.startsWith('image/')) return reject(new Error('请选择图片文件'));
