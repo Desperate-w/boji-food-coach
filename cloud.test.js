@@ -171,6 +171,12 @@ test('real PostgreSQL adapters remain consistent across independent application 
       const past=days=>new Date(Date.parse(today+'T12:00:00Z')-days*86400000).toISOString().slice(0,10);
       const state=(await call(0,'/api/state',{user})).data;
       assert.equal(state.today.calories,0);assert.equal(state.archives[past(1)].calories,150);
+      outputs.push(turn('clarify'));
+      await call(0,'/api/chat',{method:'POST',user,body:{requestId:'cloud-switch-date-1',text:'昨天午餐随便吃了点东西'}});
+      outputs.push(turn('consumed',egg));
+      await call(1,'/api/chat',{method:'POST',user,body:{requestId:'cloud-switch-date-2',text:'今天吃了两个鸡蛋'}});
+      const switched=(await call(0,'/api/state',{user})).data;
+      assert.equal(switched.today.calories,150);assert.equal(switched.archives[past(1)].calories,150);
       const id=(await dbs[0].pool.query('SELECT id FROM boji_account WHERE username=$1',['cloudreview'])).rows[0].id;
       const lease=await accounts[0].acquireWrite(id);
       try {await new CloudStore(dbs[0],id,media,{lease}).commitTurn({requestId:'cloud-old-clarify',requestHash:'seed',conversationDate:past(1),text:'昨天早餐随便吃了点东西',source:'text',result:turn('clarify')});}

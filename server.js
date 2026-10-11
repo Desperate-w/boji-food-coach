@@ -268,6 +268,7 @@ function resolveMealDate(result, text, today, clarification) {
     if (!validMealDate(proposed,today)) throw Object.assign(new Error('餐食日期无效，请使用过去一年内的真实日期。'),{status:400});
     return proposed;
   }
+  if (/今天|今日/.test(text)) return today;
   if (clarification) {
     const savedDate=clarification.image_json?JSON.parse(clarification.image_json).mealDate:null;
     const originalDate=savedDate || resolveMealDate(result,clarification.original_text||'',clarification.date,null);

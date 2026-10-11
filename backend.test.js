@@ -433,6 +433,12 @@ test('answering a clarification preserves the original backdated meal',async()=>
   const state=(await request('/api/state')).payload;
   assert.equal(state.today.calories,0);assert.equal(state.archives[yesterday].calories,150);
   assert.equal(state.messages.length,4);
+  outputs.push(turn('clarify'));
+  await request('/api/chat','POST',{requestId:'clarify-switch-day-1',text:'昨天午餐随便吃了点东西'});
+  outputs.push(turn('consumed',egg));
+  await request('/api/chat','POST',{requestId:'clarify-switch-day-2',text:'今天吃了两个鸡蛋'});
+  const switched=(await request('/api/state')).payload;
+  assert.equal(switched.today.calories,150);assert.equal(switched.archives[yesterday].calories,150);
 }));
 
 test('a legacy clarification from before midnight keeps its original relative date',async()=>withServer(async({request,outputs,dir})=>{
