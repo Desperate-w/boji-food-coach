@@ -15,13 +15,14 @@
   const round = (value, step=1) => Math.round(value/step)*step;
 
   function validate(input) {
+    if (!input || typeof input!=='object' || Array.isArray(input)) return '身体资料格式无效。';
     const age=Number(input.age), height=Number(input.height), weight=Number(input.weight);
     if (!Number.isInteger(age) || age<18 || age>100) return '年龄请填写 18–100 岁；当前估算仅适用于成年人。';
     if (!Number.isFinite(height) || height<120 || height>230) return '身高请填写 120–230 cm。';
     if (!Number.isFinite(weight) || weight<30 || weight>250) return '体重请填写 30–250 kg。';
     if (!['男','女','其他'].includes(input.gender)) return '请选择计算所用的性别参数。';
-    if (!GOALS[input.goal]) return '请选择当前目标。';
-    if (!ACTIVITY[input.activity]) return '请选择日常活动程度。';
+    if (typeof input.goal!=='string' || !Object.hasOwn(GOALS,input.goal)) return '请选择当前目标。';
+    if (typeof input.activity!=='string' || !Object.hasOwn(ACTIVITY,input.activity)) return '请选择日常活动程度。';
     if (!['0–1 次','每周 2–3 次','每周 4–5 次','每周 6+ 次'].includes(input.frequency)) return '请选择每周训练频率。';
     if (!['力量训练','跑步 / 有氧','综合训练','暂无固定训练'].includes(input.training)) return '请选择主要训练类型。';
     return '';

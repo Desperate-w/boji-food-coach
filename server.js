@@ -173,7 +173,7 @@ function validContext(body) {
   return body && typeof body.text === 'string' && body.text.length <= 4000
     && (body.text.trim() || photos.inputImages(body).length)
     && typeof body.requestId === 'string' && /^[a-zA-Z0-9-]{8,80}$/.test(body.requestId)
-    && (!body.targetMealId || typeof body.targetMealId === 'string');
+    && (!body.targetMealId || (typeof body.targetMealId === 'string' && /^[\w-]{1,80}$/.test(body.targetMealId)));
 }
 
 function buildInput(body, state, clarification, imageDescription, historySummary) {
@@ -187,7 +187,7 @@ function buildInput(body, state, clarification, imageDescription, historySummary
     last_seven_days:historySummary,
     confirmed_habits:state.memories.slice(0,20).map(memory=>memory.text),
     recent_messages: state.messages.filter(message=>!message.recordDeleted).slice(-12).map(m => ({role:m.role,text:m.text||'',after:m.after||''})),
-    prior_clarification: clarification ? {original_text:clarification.original_text, date:clarification.date, image_description:clarification.image_json?JSON.parse(clarification.image_json).description:null} : null,
+    prior_clarification: clarification ? {original_text:clarification.original_text, date:clarification.date, image_description:clarification.image_json?JSON.parse(clarification.image_json).description:null, meal_date:clarification.image_json?JSON.parse(clarification.image_json).mealDate||null:null} : null,
     target_meal_id: body.targetMealId || null,
     image_description: imageDescription || null,
     image_count: photos.inputImages(body).length,
@@ -208,21 +208,34 @@ function validateResult(result) {
     if (!Array.isArray(m.food_items) || m.food_items.length < 1 || m.food_items.length > 20) throw new Error('模型没有给出可用的食物项');
     const sums={calories:0,protein:0,carbs:0,fat:0,fiber:0};
     for (const item of m.food_items) {
-      if (!item || typeof item.food_name !== 'string' || !item.food_name.trim() || typeof item.estimated_amount !== 'string' || !item.estimated_amount.trim() || !['high','medium','low'].includes(item.confidence)) throw new Error('模型食物项无效');
+      if (!item || typeof item.food_name !== 'string' || !item.food_name.trim() || item.food_name.length>200 || typeof item.estimated_amount !== 'string' || !item.estimated_amount.trim() || item.estimated_amount.length>200 || !['high','medium','low'].includes(item.confidence)) throw new Error('模型食物项无效');
       for (const field of Object.keys(sums)) {
         if (!Number.isInteger(item[field]) || item[field] < 0 || item[field] > 5000) throw new Error('模型食物项营养数据无效');
         sums[field]+=item[field];
       }
     }
     if (Math.abs(sums.calories-m.calories)>Math.max(40,m.calories*.2)) throw new Error('模型整餐热量与食物项不一致');
-    for (const field of Object.keys(sums)) m[field]=sums[field];
-    if (m.calorie_min!==null && m.calorie_max!==null && (!Number.isInteger(m.calorie_min)||!Number.isInteger(m.calorie_max)||m.calorie_min>m.calories||m.calorie_max<m.calories||m.calorie_min<0)) throw new Error('模型热量区间无效');
+    for (const field of Object.keys(sums)) {
+      if (sums[field]>10000) throw new Error('模型整餐营养数据超出范围');
+      m[field]=sums[field];
+    }
+    if (m.calorie_min!==null && m.calorie_max!==null && (!Number.isInteger(m.calorie_min)||!Number.isInteger(m.calorie_max)||m.calorie_min>m.calories||m.calorie_max<m.calories||m.calorie_min<0||m.calorie_max>10000)) throw new Error('模型热量区间无效');
     if ((m.calorie_min===null)!==(m.calorie_max===null)) throw new Error('模型热量区间不完整');
   }
   return result;
 }
 
 function enforceRecordBoundary(result, text, hasImage, targetMealId, clarification, meals=[]) {
+  const eatenText=text.replace(/(?:还没|尚未|没有|没)(?:有)?(?:吃|喝)(?:完|过|了)?/g,'');
+  const eaten = /(吃了|喝了|吃过|喝过|吃的|喝的|已吃|刚吃|刚喝|吃完|喝完|吃了一碗|吃了一份)/.test(eatenText);
+  const planned = /((想|准备|打算|计划).{0,10}(吃|喝|改|换)|还没吃|还没喝|如果.{0,12}(吃|喝|改|换)|明天.{0,12}(吃|喝)|想要吃)/.test(text);
+  const hypothetical=/(?:如果|假如|假设|要是).{0,30}(?:吃|喝|改|换)/.test(text);
+  const question = /(多少卡|多少热量|能不能吃|可不可以吃|可以吃|还能吃|会不会超|为什么|[?？])/.test(text);
+  const noWrite = /(?:不要|别|先不|暂不).{0,8}(?:修改|更正|记录|保存)/.test(text);
+  if (['consumed','correction'].includes(result.action)) {
+    if (noWrite || hypothetical || (planned && !eaten)) return {...result,action:'planned',meal:null,target_meal_id:null,reply:'这次没有更改饮食记录。实际吃完或确认需要修改后，再告诉我即可。'};
+    if (question && !eaten) return {...result,action:'question',meal:null,target_meal_id:null,reply:'这是饮食咨询，暂时不会更改记录。确认实际吃了什么后，再告诉我即可。'};
+  }
   if (result.action === 'correction') {
     const chosen=targetMealId ? meals.find(meal=>meal.id===targetMealId) : null;
     const candidates=meals.filter(meal=>text.includes(meal.name)||meal.foodItems?.some(item=>{
@@ -234,26 +247,33 @@ function enforceRecordBoundary(result, text, hasImage, targetMealId, clarificati
   }
   if (result.action === 'clarify' && clarification) return {...result,action:'question',meal:null,target_meal_id:null,reply:'目前信息仍不足，我先不记录这顿。你想起来主要食物后再告诉我即可。'};
   if (result.action !== 'consumed') return result;
-  const eaten = /(吃了|喝了|吃过|喝过|吃的|喝的|已吃|刚吃|刚喝|吃完|喝完|吃了一碗|吃了一份)/.test(text);
-  const planned = /((想|准备|打算|计划).{0,10}吃|还没吃|如果.{0,12}吃|明天.{0,12}吃|想要吃)/.test(text);
-  const question = /(多少卡|多少热量|能不能吃|可不可以吃|可以吃|还能吃|会不会超|为什么|[?？])/.test(text);
-  if (planned && !eaten) return {...result, action: 'planned', meal: null, target_meal_id: null, reply: '这顿还没有计入今天的记录。你吃完后告诉我，我再结合当时的份量帮你估算和记录。'};
-  if (question && !eaten) return {...result, action: 'question', meal: null, target_meal_id: null, reply: '这是饮食咨询，暂时不会计入今天的记录。你可以问我怎么安排；真正吃完后再告诉我。'};
   if (!hasImage && !eaten && !clarification) return {...result, action: 'clarify', meal: null, target_meal_id: null, reply: '这份是已经吃了，还是准备吃？确认后我再帮你记录。'};
   return result;
 }
 
 function resolveMealDate(result, text, today, clarification) {
-  if (result.action!=='consumed') return today;
+  if (!['consumed','clarify'].includes(result.action)) return today;
   const shift=days=>new Date(Date.parse(`${today}T12:00:00Z`)-days*86400000).toISOString().slice(0,10);
   if (/前天/.test(text)) return shift(2);
   if (/昨天/.test(text)) return shift(1);
-  if (/(^|\D)\d{4}-\d{2}-\d{2}(\D|$)|\d{1,2}月\d{1,2}日/.test(text) && /^\d{4}-\d{2}-\d{2}$/.test(result.occurred_on||'')) {
-    const proposed=result.occurred_on;
-    const parsed=new Date(`${proposed}T12:00:00Z`);
-    if (!Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0,10)===proposed && proposed<=today && proposed>=shift(365)) return proposed;
+  const literal=/(?:^|\D)(\d{4}-\d{2}-\d{2})(?:\D|$)/.exec(text)?.[1];
+  const monthDay=/(\d{1,2})月(\d{1,2})日/.exec(text);
+  if (literal || monthDay) {
+    let proposed=literal;
+    if (!proposed) {
+      const suffix=`-${monthDay[1].padStart(2,'0')}-${monthDay[2].padStart(2,'0')}`;
+      proposed=`${today.slice(0,4)}${suffix}`;
+      if (proposed>today) proposed=`${Number(today.slice(0,4))-1}${suffix}`;
+    }
+    if (!validMealDate(proposed,today)) throw Object.assign(new Error('餐食日期无效，请使用过去一年内的真实日期。'),{status:400});
+    return proposed;
   }
-  return clarification?.date||today;
+  if (clarification) {
+    const savedDate=clarification.image_json?JSON.parse(clarification.image_json).mealDate:null;
+    const originalDate=savedDate || resolveMealDate(result,clarification.original_text||'',clarification.date,null);
+    if (validMealDate(originalDate,today)) return originalDate;
+  }
+  return today;
 }
 
 function apiErrorMessage(status, detail) {
@@ -506,7 +526,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
       } catch(error) { json(res,error.status||500,{error:publicError(error,'保存资料失败')}); }
       return;
     }
-    const manualRoute=/^\/api\/meals(?:\/([a-f0-9-]{36}))?$/.exec(req.url);
+    const manualRoute=/^\/api\/meals(?:\/([\w-]{1,80}))?$/.exec(req.url);
     if (manualRoute && ((req.method==='POST'&&!manualRoute[1])||(req.method==='PUT'&&manualRoute[1]))) {
       try {
         if (!String(req.headers['content-type']||'').startsWith('application/json')) return json(res,415,{error:'仅接受 JSON 请求。'});
@@ -629,7 +649,7 @@ function createAppServer({apiKey = API_KEY, model = MODEL, visionModel = VISION_
 
         if (!upstream.ok) {
           const errorText = await upstream.text();
-          return json(res,upstream.status,{error:apiErrorMessage(upstream.status,errorText)});
+          return json(res,upstream.status===429?429:502,{error:apiErrorMessage(upstream.status,errorText)});
         }
         if (!upstream.body) {
           return json(res,502,{error:'DeepSeek 没有返回数据流，请重试。'});

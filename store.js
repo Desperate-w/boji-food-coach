@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const {DatabaseSync} = require('node:sqlite');
 const nutrition = require('./nutrition.js');
+const {normalizeBackup}=require('./backup.js');
 
 const uid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -346,7 +347,7 @@ class Store {
         for (let index=0;index<data.food_items.length;index++) this.db.prepare('INSERT INTO food_item(id,meal_id,position,payload_json) VALUES(?,?,?,?)').run(uid(),id,index,JSON.stringify(data.food_items[index]));
         receipt=meal; relatedMealId=id;
       }
-      if (result.action === 'clarify') this.db.prepare('INSERT INTO clarification(id,original_text,date,image_json,asked_at) VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET original_text=excluded.original_text,date=excluded.date,image_json=excluded.image_json,asked_at=excluded.asked_at').run(text,conversationDate,imageDescription?JSON.stringify({description:imageDescription}):null,timestamp);
+      if (result.action === 'clarify') this.db.prepare('INSERT INTO clarification(id,original_text,date,image_json,asked_at) VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET original_text=excluded.original_text,date=excluded.date,image_json=excluded.image_json,asked_at=excluded.asked_at').run(text,conversationDate,imageDescription||mealDate!==conversationDate?JSON.stringify({description:imageDescription||null,mealDate}):null,timestamp);
       else this.db.prepare('DELETE FROM clarification WHERE id=1').run();
       const explicitMemory=/^(?:请)?记住[：:，, ]*(.+?)[。.!！]?$/u.exec(text)?.[1];
       if (explicitMemory&&!/[?？]|今天|这顿|刚才|本次/.test(explicitMemory)&&explicitMemory.length>=2&&explicitMemory.length<=200) this.saveMemory(explicitMemory);
@@ -375,47 +376,7 @@ class Store {
     return {format:'boji-backup-v1',exportedAt:now(),profile:this.profile(),meals:this.meals(),messages,memories:this.memories(),revisions:this.db.prepare('SELECT meal_id,changed_at,before_json,after_json,reason FROM meal_revision ORDER BY changed_at').all()};
   }
   importData(backup, mode='all') {
-    if (!backup || !['boji-browser-v1','boji-backup-v1'].includes(backup.format) || !['all','profile','records'].includes(mode)) { const e=new Error('备份格式或导入范围无效。');e.status=400;throw e; }
-    const rawMeals=Array.isArray(backup.meals)?backup.meals:[];
-    const rawMessages=Array.isArray(backup.messages)?backup.messages:[];
-    const rawMemories=Array.isArray(backup.memories)?backup.memories:[];
-    if (rawMeals.length>5000 || rawMessages.length>10000 || rawMemories.length>50) {const e=new Error('备份记录过多，请分批导入。');e.status=413;throw e;}
-    const safeDate=value=>{
-      if (typeof value!=='string'||!datePattern.test(value)) return null;
-      const parsed=new Date(`${value}T12:00:00Z`);
-      return !Number.isNaN(parsed.getTime())&&parsed.toISOString().slice(0,10)===value?value:null;
-    };
-    const backupDate=safeDate(backup.activeDate)||this.today();
-    const legacy=backup.format==='boji-browser-v1';
-    const normalizeMeal=source=>{
-      if (!source || typeof source!=='object') throw new Error('备份中的餐食格式无效。');
-      const date=safeDate(source.date)||backupDate;
-      const meal={...source};
-      if (!['早餐','午餐','晚餐','加餐'].includes(meal.type)||typeof meal.name!=='string'||!meal.name.trim()||meal.name.length>200) throw new Error('备份中的餐食名称或餐次无效。');
-      for (const field of fields) if (!Number.isInteger(meal[field])||meal[field]<0||meal[field]>10000) throw new Error('备份中的营养数据无效。');
-      meal.id=typeof meal.id==='string'&&/^[\w-]{1,80}$/.test(meal.id)?meal.id:uid();
-      meal.input=typeof meal.input==='string'?meal.input.slice(0,4000):'';
-      meal.time=typeof meal.time==='string'?meal.time.slice(0,30):'';
-      meal.source=legacy?'legacy-demo':(meal.source||'restored');meal.importedDemo=legacy||Boolean(meal.importedDemo);
-      meal.foodItems=Array.isArray(meal.foodItems)&&meal.foodItems.length?meal.foodItems:[{food_name:meal.name,estimated_amount:'旧版演示估算，未拆分',...Object.fromEntries(fields.map(field=>[field,meal[field]])),confidence:'low'}];
-      return {date,meal};
-    };
-    const normalizeMessage=source=>{
-      const date=safeDate(source.date)||backupDate;
-      if (!source||typeof source!=='object'||!['user','assistant'].includes(source.role)||typeof source.text!=='string'||source.text.length>8000) throw new Error('备份中的交流记录无效。');
-      const message={id:typeof source.id==='string'&&/^[\w-]{1,80}$/.test(source.id)?source.id:uid(),role:source.role,text:source.text,time:typeof source.time==='string'?source.time.slice(0,30):''};
-      if (typeof source.reasoningText==='string') message.reasoningText=source.reasoningText.slice(0,30000);
-      Object.assign(message,photos.withPhotoUrls(message,photos.backupPhotoUrls(source)));
-      if (source.receipt && typeof source.receipt==='object') message.receipt=source.receipt;
-      if (source.revised===true) message.revised=true;
-      message.importedDemo=legacy||Boolean(source.importedDemo);
-      return {date,message};
-    };
-    const sampleIds=new Set(['meal-breakfast','meal-lunch','meal-snack']);
-    const sampleTexts=new Set(['中午吃了一份鸡腿饭，加一个蛋，米饭剩了一点。','晚上可以吃火锅吗？','可以。按今天的进度，火锅优先选牛肉、虾、鱼和蔬菜；蘸料清淡一点，主食按食欲吃就好。']);
-    const meals=mode==='profile'?[]:rawMeals.filter(row=>row&&!sampleIds.has(row.id)).map(normalizeMeal);
-    const messages=mode==='profile'?[]:rawMessages.filter(row=>row&&!sampleTexts.has(row.text)).map(normalizeMessage);
-    const memories=mode==='records'?[]:rawMemories.map(row=>row?.text).filter(text=>typeof text==='string'&&text.trim().length>=2&&text.trim().length<=200);
+    const {meals,messages,memories}=normalizeBackup(backup,mode,this.today());
     if (mode!=='profile'&&!this.profile() && !(mode!=='records'&&backup.profile)) {const e=new Error('请先建档，或选择同时导入档案。');e.status=409;throw e;}
     let mealCount=0,messageCount=0;
     const importedMedia=[];

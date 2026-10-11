@@ -22,7 +22,7 @@
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const fmt = (n) => Math.round(n).toLocaleString('en-US');
   const timeNow = () => new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit', hour12: false});
-  const todayLabel = () => new Date().toLocaleDateString('zh-CN', {month:'long', day:'numeric', weekday:'long'});
+  const todayLabel = () => new Date(`${state.activeDate}T12:00:00Z`).toLocaleDateString('zh-CN', {month:'long', day:'numeric', weekday:'long',timeZone:'UTC'});
   const dateKey = (date=new Date()) => date.toLocaleDateString('sv-SE');
   const uid = () => Math.random().toString(36).slice(2, 10);
   const sampleIds = new Set(['meal-breakfast','meal-lunch','meal-snack']);
@@ -32,6 +32,8 @@
   const photos = window.BojiPhotos;
   let csrfToken='';
   let historyLoadId=0;
+  let serverStateRevision=0;
+  let refreshRequestId=0;
   window.addEventListener('pageshow',event=>{
     if (event.persisted && /^https?:$/.test(window.location?.protocol||'')) window.location.reload();
   });
@@ -58,7 +60,7 @@
       activeDate:dateKey(), archives:{}, historyPage:null, historyLoading:false,
       attachments:[], photoPreparing:false, draft:'', currentFeedback:null, pending:null, requestError:null,
       connection:{mode:'checking', model:'', provider:''},
-      serverToday:null, retryRequestId:null, retrySource:null, importBackup:null, memories:[], memoryDraft:'', memoryEditId:null,
+      serverToday:null, retryRequestId:null, retrySource:null, retryInput:null, importBackup:null, memories:[], memoryDraft:'', memoryEditId:null,
       profile:null, meals:[], messages:[], mealDraft:null, mealSaving:false, mealError:'', deleteTarget:null, deleteSaving:false, deleteError:'',
     };
   }
@@ -579,10 +581,12 @@
       }
     } finally {reader.releaseLock();}
   }
-  function applyServerState(snapshot) {
+  function applyServerState(snapshot,{preserveDrafts=false}={}) {
+    const editingProfile=!state.onboardingComplete||state.modal==='onboarding';
+    serverStateRevision++;
     state.profile=snapshot.profile;
     state.onboardingComplete=Boolean(snapshot.profile);
-    state.onboardingDraft=profileDraft(snapshot.profile);
+    if (!preserveDrafts||!editingProfile) state.onboardingDraft=profileDraft(snapshot.profile);
     state.activeDate=snapshot.activeDate;
     state.meals=snapshot.meals;
     state.messages=snapshot.messages;
@@ -591,10 +595,23 @@
     state.memories=snapshot.memories||[];
     state.serverToday=snapshot.today;
   }
-  async function refreshLiveState() {
+  async function refreshLiveState({verifySession=false}={}) {
+    const request=++refreshRequestId,revision=serverStateRevision;
+    if (verifySession) {
+      const auth=await apiFetch('/api/auth/session',{cache:'no-store'});
+      if (!auth.ok) return;
+      const session=await auth.json();
+      if (request!==refreshRequestId) return;
+      if (session.csrf!==csrfToken) {
+        csrfToken='';serverStateRevision++;historyLoadId++;
+        liveController?.abort();state=seedState();render();window.location.reload();return;
+      }
+    }
     const response=await apiFetch('/api/state',{cache:'no-store'});
     if (!response.ok) throw new Error('无法读取服务端记录');
-    applyServerState(await response.json());
+    const snapshot=await response.json();
+    if (request!==refreshRequestId||revision!==serverStateRevision) return;
+    applyServerState(snapshot,{preserveDrafts:true});
     render();
   }
   function finishLiveTurn(payload) {
@@ -602,13 +619,17 @@
     clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
     applyServerState(payload.state);
     state.currentFeedback=payload.assistantMessage?.recordDeleted?null:payload.assistantMessage;
-    state.pending=null;state.requestError=null;state.retryRequestId=null;state.retrySource=null;state.correctionTarget=null;
+    state.pending=null;state.requestError=null;state.retryRequestId=null;state.retrySource=null;state.retryInput=null;state.correctionTarget=null;
     render();scrollBottom();
   }
   async function sendLiveMessage(rawText, attachments, options={}) {
     const text=rawText.trim();
     if (!text&&!attachments.length) return;
-    const requestId=options.requestId||uid()+uid();
+    const targetMealId=state.correctionTarget||null,sessionToken=csrfToken;
+    const retryInput=JSON.stringify({text,images:attachments.map(photo=>photo.url),targetMealId});
+    const retrying=state.retryRequestId&&state.retryInput===retryInput&&(!options.source||options.source===state.retrySource);
+    const requestId=retrying?state.retryRequestId:uid()+uid();
+    const source=retrying?state.retrySource:options.source||(attachments.length?'photo':'text');
     state.pending={phase:'thinking',reasoning:'',reasoningOpen:false,text,startedAt:Date.now()};
     state.requestError=null;state.currentFeedback=null;state.menuOpen=false;
     state.draft='';state.attachments=[];render();scrollBottom();
@@ -618,17 +639,18 @@
     try {
       const response=await apiFetch('/api/chat',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({requestId,text,...(attachments.length>1?{images:attachments.map(photo=>photo.url)}:{image:attachments[0]?.url||null}),targetMealId:state.correctionTarget||null,source:options.source||(attachments.length?'photo':'text')}),
+        body:JSON.stringify({requestId,text,...(attachments.length>1?{images:attachments.map(photo=>photo.url)}:{image:attachments[0]?.url||null}),targetMealId,source}),
         signal:controller.signal,
       });
       if (!response.ok) {
         const error=await response.json().catch(()=>({}));
         throw new Error(error.error||`服务暂时不可用（HTTP ${response.status}）`);
       }
-      if (response.headers?.get('content-type')?.includes('application/json')) {finishLiveTurn(await response.json());return;}
+      if (response.headers?.get('content-type')?.includes('application/json')) {const payload=await response.json();if(sessionToken===csrfToken) finishLiveTurn(payload);return;}
       if (!response.body) throw new Error('浏览器没有收到模型的数据流');
       let result=null;
       for await (const event of readAppEvents(response.body)) {
+        if (sessionToken!==csrfToken) return;
         if (event.type==='status') {
           state.pending.phase=event.data.phase||'thinking';
           render();
@@ -640,16 +662,18 @@
         } else if (event.type==='error') throw new Error(event.data.message||'模型生成失败');
       }
       if (!result) throw new Error('模型没有返回完整结果，请重试');
-      finishLiveTurn(result);
+      if (sessionToken===csrfToken) finishLiveTurn(result);
     } catch (error) {
+      if (sessionToken!==csrfToken) return;
       try {
         const reconcile=await apiFetch(`/api/turn/${encodeURIComponent(requestId)}`,{cache:'no-store'});
-        if (reconcile.ok) {finishLiveTurn(await reconcile.json());return;}
+        if (reconcile.ok) {const payload=await reconcile.json();if(sessionToken===csrfToken) finishLiveTurn(payload);return;}
       } catch {}
+      if (sessionToken!==csrfToken) return;
       clearInterval(thinkingTimer);
       clearTimeout(reasoningRenderTimer); reasoningRenderTimer=null;
       state.pending=null;state.requestError=controller.signal.aborted?'已停止生成。输入已保留，可以重试。':(error.message||'连接失败，请重试');
-      state.retryRequestId=requestId;state.retrySource=options.source||(attachments.length?'photo':'text');state.draft=text;state.attachments=attachments;render();
+      state.retryRequestId=requestId;state.retrySource=source;state.retryInput=retryInput;state.draft=text;state.attachments=attachments;render();
     } finally {if (liveController===controller) liveController=null;}
   }
   function sendMessage(rawText, attachments=state.attachments, options={}) {
@@ -726,6 +750,7 @@
     const button=e.target.closest('[data-action]'); if (!button) return;
     const action=button.dataset.action;
     const historyRequest=++historyLoadId;
+    const historyRevision=serverStateRevision;
     if (action==='nav') {state.view=button.dataset.view;state.historyDetail=null;state.currentFeedback=null;render();window.scrollTo(0,0);}
     else if (action==='history-day') {
       const day=button.dataset.day;
@@ -733,7 +758,7 @@
         try {
           const response=await apiFetch(`/api/history/${day}`,{cache:'no-store'});
           const payload=await response.json();
-          if (historyRequest!==historyLoadId) return;
+          if (historyRequest!==historyLoadId||historyRevision!==serverStateRevision) return;
           if (!response.ok) throw new Error(payload.error||'读取当天记录失败');
           state.archives[day]=payload.day;
         } catch(error) {if (historyRequest===historyLoadId) toast(error.message||'读取当天记录失败');return;}
@@ -746,6 +771,7 @@
       try {
         const response=await apiFetch(`/api/history?before=${state.historyPage.nextBefore}`,{cache:'no-store'});
         const payload=await response.json();
+        if (historyRevision!==serverStateRevision) return;
         if (!response.ok) throw new Error(payload.error||'读取历史失败');
         state.archives={...state.archives,...payload.archives};state.historyPage=payload.historyPage;
       } catch(error) {failureMessage=error.message||'读取历史失败';}
@@ -784,7 +810,7 @@
       if (state.pending.reasoningOpen) revealChatPanel(document.querySelector('.thinking-panel'));
     }
     else if (action==='stop-live') liveController?.abort();
-    else if (action==='retry-live') sendMessage(state.draft,state.attachments,{requestId:state.retryRequestId,source:state.retrySource});
+    else if (action==='retry-live') sendMessage(state.draft,state.attachments);
     else if (action==='toggle-menu') {state.menuOpen=!state.menuOpen;document.getElementById('composer-menu')?.classList.toggle('open',state.menuOpen);button.setAttribute('aria-expanded',String(state.menuOpen));}
     else if (action==='open-photo') {if (state.pending||state.photoPreparing) return;if (state.attachments.length>=photos.MAX_PHOTOS) return toast(`每条消息最多添加 ${photos.MAX_PHOTOS} 张照片`);state.menuOpen=false;document.getElementById('composer-menu')?.classList.remove('open');photoInput.click();}
     else if (action==='remove-photo') {if (state.pending||state.photoPreparing) return;state.attachments.splice(Number(button.dataset.index),1);updateComposerPhoto();}
@@ -1013,7 +1039,7 @@
     } catch {state.connection={mode:'unavailable',model:'',provider:''};}
     render();
   }
-  window.addEventListener?.('focus',()=>{if (state.connection.mode==='live') refreshLiveState().catch(()=>{});else if (ensureCurrentDay()) render();});
+  window.addEventListener?.('focus',()=>{if (state.connection.mode==='live') refreshLiveState({verifySession:true}).catch(()=>{});else if (ensureCurrentDay()) render();});
   ensureCurrentDay();
   render();
   checkConnection();

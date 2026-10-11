@@ -10,7 +10,7 @@
     "invite:owner": "node admin.js owner",
     "invite:friend": "node admin.js member",
     "invite:member": "node admin.js member",
-    "test": "node --test nutrition.test.js voice.test.js today.test.js photos.test.js backend.test.js accounts.test.js multiuser.test.js",
+    "test": "node --test nutrition.test.js voice.test.js today.test.js photos.test.js frontend.test.js review.test.js backend.test.js accounts.test.js multiuser.test.js",
     "build:vercel": "node scripts/build-vercel.js",
     "db:migrate": "node --env-file-if-exists=.env.vercel.local scripts/database.js migrate",
     "db:cleanup": "node --env-file-if-exists=.env.vercel.local scripts/database.js cleanup",

@@ -19,6 +19,7 @@ async function withServer(fn) {
     const request=JSON.parse(init.body);calls.push(request);
     if (request.model==='deepseek-flash') return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:'一份鸡肉饭，含米饭和鸡肉。'}]}]}),{headers:{'Content-Type':'application/json'}});
     const output=outputs.shift()||turn('question');
+    if (output instanceof Response) return output;
     if (request.text?.format?.name==='manual_meal') return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(output)}]}]}),{headers:{'Content-Type':'application/json'}});
     if (output.incomplete) return new Response(`data: ${JSON.stringify({type:'response.incomplete'})}\n\n`,{headers:{'Content-Type':'text/event-stream'}});
     return fakeStream(output);
@@ -393,4 +394,70 @@ test('truncated model output leaves no meal and no committed request',async()=>w
   assert.match(response.payload,/event: error/);
   assert.equal((await request('/api/state')).payload.meals.length,0);
   assert.equal((await request('/api/turn/test-incomplete-1')).status,404);
+}));
+
+
+test('legacy imported meal IDs remain editable and a hypothetical correction leaves totals unchanged',async()=>withServer(async({request,outputs})=>{
+  await request('/api/profile','PUT',{profile});
+  const state=(await request('/api/state')).payload;
+  const meal={id:'old-browser-meal',type:'早餐',name:'鸡蛋',calories:150,protein:12,carbs:1,fat:10,fiber:0,date:state.activeDate};
+  assert.equal((await request('/api/import','POST',{mode:'records',backup:{format:'boji-browser-v1',meals:[meal]}})).status,200);
+  outputs.push({...egg,name:'已编辑的鸡蛋'});
+  const edit=await request('/api/meals/old-browser-meal','PUT',{type:'早餐',description:'鸡蛋 2 个'});
+  assert.equal(edit.status,200);assert.equal(edit.payload.meal.id,meal.id);
+  outputs.push(turn('correction',egg,meal.id));
+  await request('/api/chat','POST',{requestId:'hypothetical-correction',text:'如果鸡蛋只吃一半，会少多少热量？',targetMealId:meal.id});
+  assert.equal((await request('/api/state')).payload.meals[0].name,'已编辑的鸡蛋');
+}));
+
+test('upstream authentication failures do not invalidate the app login or write a turn',async()=>withServer(async({request,outputs})=>{
+  await request('/api/profile','PUT',{profile});
+  for(const status of [401,403,404]) {
+    outputs.push(new Response('model authentication failed',{status}));
+    const r=await request('/api/chat','POST',{requestId:'bad-model-key-'+status,text:'刚吃了两个鸡蛋'});
+    assert.equal(r.status,502);assert.match(r.payload.error,/DeepSeek|模型|Key/);
+  }
+  assert.equal((await request('/api/state')).payload.messages.length,0);
+  outputs.push(turn('consumed',egg));
+  assert.match((await request('/api/chat','POST',{requestId:'model-key-restored',text:'刚吃了两个鸡蛋'})).payload,/event: result/);
+}));
+
+test('answering a clarification preserves the original backdated meal',async()=>withServer(async({request,outputs})=>{
+  await request('/api/profile','PUT',{profile});
+  const today=(await request('/api/state')).payload.activeDate;
+  const yesterday=new Date(Date.parse(today+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+  outputs.push(turn('clarify'));
+  await request('/api/chat','POST',{requestId:'clarify-past-day-1',text:'昨天早餐随便吃了点东西'});
+  outputs.push(turn('consumed',egg));
+  await request('/api/chat','POST',{requestId:'clarify-past-day-2',text:'两个鸡蛋'});
+  const state=(await request('/api/state')).payload;
+  assert.equal(state.today.calories,0);assert.equal(state.archives[yesterday].calories,150);
+  assert.equal(state.messages.length,4);
+}));
+
+test('a legacy clarification from before midnight keeps its original relative date',async()=>withServer(async({request,outputs,dir})=>{
+  await request('/api/profile','PUT',{profile});
+  const today=(await request('/api/state')).payload.activeDate;
+  const past=days=>new Date(Date.parse(today+'T12:00:00Z')-days*86400000).toISOString().slice(0,10);
+  const store=new Store(path.join(dir,'boji.sqlite'));
+  try {store.commitTurn({requestId:'old-clarification',requestHash:'seed',conversationDate:past(1),text:'昨天早餐随便吃了点东西',source:'text',result:turn('clarify')});}
+  finally {store.close();}
+  outputs.push(turn('consumed',egg));
+  await request('/api/chat','POST',{requestId:'clarify-after-midnight',text:'两个鸡蛋'});
+  const state=(await request('/api/state')).payload;
+  assert.equal(state.today.calories,0);assert.equal(state.archives[past(2)].calories,150);
+}));
+
+test('explicit backdated dates override a model date and invalid dates never write records',async()=>withServer(async({request,outputs})=>{
+  await request('/api/profile','PUT',{profile});
+  const today=(await request('/api/state')).payload.activeDate;
+  const past=new Date(Date.parse(today+'T12:00:00Z')-3*86400000).toISOString().slice(0,10);
+  outputs.push({...turn('consumed',egg),occurred_on:today});
+  await request('/api/chat','POST',{requestId:'explicit-past-date',text:past+' 早餐吃了两个鸡蛋'});
+  const before=(await request('/api/state')).payload;
+  assert.equal(before.today.calories,0);assert.equal(before.archives[past].calories,150);
+  outputs.push(turn('consumed',egg));
+  const invalid=await request('/api/chat','POST',{requestId:'invalid-food-date',text:'2026-02-30 早餐吃了两个鸡蛋'});
+  assert.match(invalid.payload,/日期无效/);assert.equal((await request('/api/turn/invalid-food-date')).status,404);
+  assert.equal((await request('/api/state')).payload.messages.length,before.messages.length);
 }));

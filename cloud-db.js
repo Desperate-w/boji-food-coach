@@ -19,22 +19,32 @@ class CloudDatabase {
   async transaction(work, {checkReady=true}={}) {
     if (checkReady) await this.ready();
     const client=await this.pool.connect();
+    let pending=Promise.resolve(),queryFailure=null,closed=false;
     try {
       await client.query('BEGIN');
       // pg clients execute one query at a time, even when callers gather reads concurrently.
-      let pending=Promise.resolve();
       const serial={query:(...args)=>{
-        const result=pending.then(()=>client.query(...args));
-        pending=result.catch(()=>{});
+        const result=pending.then(()=>{
+          if (closed) throw new Error('事务已经结束，不能继续执行查询。');
+          if (queryFailure) throw queryFailure;
+          return client.query(...args);
+        });
+        pending=result.catch(error=>{queryFailure ||=error;});
         return result;
       }};
       const result=await work(serial);
+      await pending;
+      if (queryFailure) throw queryFailure;
+      closed=true;
       await client.query('COMMIT');
       return result;
     } catch(error) {
+      // Stop unsent queries and drain the active query before rollback or pool reuse.
+      closed=true;
+      await pending;
       try {await client.query('ROLLBACK');} catch {}
       throw error;
-    } finally {client.release();}
+    } finally {closed=true;client.release();}
   }
   async migrate() {
     const schema=await fs.readFile(path.join(__dirname,'db','schema.sql'),'utf8');

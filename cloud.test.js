@@ -147,6 +147,38 @@ test('real PostgreSQL adapters remain consistent across independent application 
       assert.equal((await call(1,'/api/history/'+today,{method:'DELETE',user:first})).status,200);
       await store.flushMediaGarbage();assert.equal(objects.size,0);
     });
+    await t.test('personal backup restores real sample-matching text and reasoning; old meal IDs are editable',async()=>{
+      const user=await register('cloudreview');
+      await call(0,'/api/profile',{method:'PUT',user,body:{profile}});
+      const meal={id:'meal-breakfast',date:today,name:egg.name,type:egg.type,calories:150,protein:12,carbs:1,fat:10,fiber:0,foodItems:egg.food_items};
+      const message={id:'review-message',date:today,role:'assistant',text:'晚上可以吃火锅吗？',live:true,reasoningText:'保存的思考',elapsedSeconds:8,after:'完整的说明',recordDeleted:true};
+      const body={mode:'records',backup:{format:'boji-backup-v1',meals:[meal],messages:[message]}};
+      const imported=await call(0,'/api/import',{method:'POST',user,body});
+      assert.equal(imported.status,200,JSON.stringify(imported.data));assert.equal(imported.data.importedMeals,1);
+      const restored=(await call(1,'/api/state',{user})).data;
+      assert.equal(restored.messages[0].text,message.text);assert.equal(restored.messages[0].live,true);
+      assert.equal(restored.messages[0].reasoningText,message.reasoningText);assert.equal(restored.messages[0].recordDeleted,true);
+      outputs.push({...egg,name:'编辑后的鸡蛋'});
+      assert.equal((await call(1,'/api/meals/meal-breakfast',{method:'PUT',user,body:{type:'早餐',description:'两个鸡蛋'}})).status,200);
+      outputs.push(turn('correction',egg,meal.id));
+      await call(0,'/api/chat',{method:'POST',user,body:{requestId:'cloud-hypothetical-fix',text:'如果鸡蛋只吃一半，会少多少热量？',targetMealId:meal.id}});
+      assert.equal((await call(1,'/api/state',{user})).data.meals[0].name,'编辑后的鸡蛋');
+      assert.equal((await call(0,'/api/history/'+today,{method:'DELETE',user})).status,200);
+      outputs.push(turn('clarify'));
+      await call(0,'/api/chat',{method:'POST',user,body:{requestId:'cloud-past-clarify-1',text:'昨天早餐随便吃了点东西'}});
+      outputs.push(turn('consumed',egg));
+      await call(1,'/api/chat',{method:'POST',user,body:{requestId:'cloud-past-clarify-2',text:'两个鸡蛋'}});
+      const past=days=>new Date(Date.parse(today+'T12:00:00Z')-days*86400000).toISOString().slice(0,10);
+      const state=(await call(0,'/api/state',{user})).data;
+      assert.equal(state.today.calories,0);assert.equal(state.archives[past(1)].calories,150);
+      const id=(await dbs[0].pool.query('SELECT id FROM boji_account WHERE username=$1',['cloudreview'])).rows[0].id;
+      const lease=await accounts[0].acquireWrite(id);
+      try {await new CloudStore(dbs[0],id,media,{lease}).commitTurn({requestId:'cloud-old-clarify',requestHash:'seed',conversationDate:past(1),text:'昨天早餐随便吃了点东西',source:'text',result:turn('clarify')});}
+      finally {await lease();}
+      outputs.push(turn('consumed',egg));
+      await call(1,'/api/chat',{method:'POST',user,body:{requestId:'cloud-clarify-midnight',text:'两个鸡蛋'}});
+      assert.equal((await call(0,'/api/state',{user})).data.archives[past(2)].calories,150);
+    });
     await t.test('shared leases serialize users, enforce global concurrency and recover after failure',async()=>{
       let finish;block=new Promise(resolve=>{finish=resolve;});
       const before=modelCalls;
@@ -192,6 +224,25 @@ test('real PostgreSQL adapters remain consistent across independent application 
         assert.equal(Object.keys(b.archives).some(date=>date in a.archives),false);assert.equal(c.historyPage.hasMore,false);
         assert.equal((await store.exportData()).meals.length,65);
       } finally {await lease();}
+    });
+    await t.test('queued queries never escape a failed transaction or its released connection',async()=>{
+      await dbs[0].pool.query('CREATE TABLE review_transaction_probe(value integer)');
+      let queued=[];
+      await assert.rejects(dbs[0].transaction(async client=>{
+        queued=[client.query('SELECT 1/0'),client.query('SELECT 1'),client.query('INSERT INTO review_transaction_probe VALUES(1)')];
+        return Promise.all(queued);
+      }),/division by zero/);
+      await Promise.allSettled(queued);
+      assert.equal(Number((await dbs[0].pool.query('SELECT count(*) FROM review_transaction_probe')).rows[0].count),0);
+      await assert.rejects(dbs[0].transaction(async client=>{
+        queued=[client.query('SELECT pg_sleep(0.01)'),client.query('INSERT INTO review_transaction_probe VALUES(2)')];
+        throw new Error('application failure');
+      }),/application failure/);
+      await Promise.allSettled(queued);
+      assert.equal(Number((await dbs[0].pool.query('SELECT count(*) FROM review_transaction_probe')).rows[0].count),0);
+      await dbs[0].transaction(client=>client.query('INSERT INTO review_transaction_probe VALUES(3)'));
+      assert.equal(Number((await dbs[0].pool.query('SELECT count(*) FROM review_transaction_probe')).rows[0].count),1);
+      await dbs[0].pool.query('DROP TABLE review_transaction_probe');
     });
     await t.test('maintenance requires a secret and schema migration rejects newer databases',async()=>{
       assert.equal((await call(0,'/api/maintenance')).status,401);

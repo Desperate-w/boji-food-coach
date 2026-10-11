@@ -275,7 +275,7 @@ class CloudStore {
         }
         if (result.action==='clarify') {
           await store.query('INSERT INTO boji_clarification(account_id,original_text,date,image_json,asked_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(account_id) DO UPDATE SET original_text=EXCLUDED.original_text,date=EXCLUDED.date,image_json=EXCLUDED.image_json,asked_at=EXCLUDED.asked_at',
-            [this.accountId,text,conversationDate,imageDescription?encoded({description:imageDescription}):null,timestamp]);
+            [this.accountId,text,conversationDate,imageDescription||mealDate!==conversationDate?encoded({description:imageDescription||null,mealDate}):null,timestamp]);
         } else await store.query('DELETE FROM boji_clarification WHERE account_id=$1',[this.accountId]);
         const explicitMemory=/^(?:请)?记住[：:，, ]*(.+?)[。.!！]?$/u.exec(text)?.[1];
         if (explicitMemory&&!/[?？]|今天|这顿|刚才|本次/.test(explicitMemory)&&explicitMemory.length>=2&&explicitMemory.length<=200) await store.saveMemory(explicitMemory);
