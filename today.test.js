@@ -17,13 +17,14 @@ function openToday(options={}) {
   const context={
     window:{location:{protocol:options.live?'http:':'file:',search:''},addEventListener(){},scrollTo(){}},document,URLSearchParams,
     localStorage:{getItem(){return storage.value;},setItem(_key,value){storage.value=value;}},
-    requestAnimationFrame(callback){callback();},setTimeout(){return 1;},clearTimeout(){},
+    requestAnimationFrame(callback){callback();},setTimeout(){return 1;},clearTimeout(){},AbortController,
     setInterval(){return 1;},clearInterval(){},console,
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(`${__dirname}/nutrition.js`,'utf8'),context);
   const saved=JSON.parse(storage.value);
   saved.profile={...profile,...context.window.BojiNutrition.calculate(profile)};
+  Object.assign(saved,options.saved||{});
   storage.value=JSON.stringify(saved);
   if (options.live) {
     const serverState={profile:saved.profile,activeDate:new Date().toLocaleDateString('sv-SE'),meals:[],messages:[{role:'user',text:'测试记录'}],archives:{},memories:[],today:{calories:0,protein:0,carbs:0,fat:0,fiber:0,status:'待记录',advice:'今天还没有饮食记录。'},...(options.live.state||{})};
@@ -31,6 +32,7 @@ function openToday(options={}) {
       if (url==='/api/auth/session') return {ok:true,json:async()=>({authenticated:true,csrf:'test-csrf'})};
       if (url==='/api/health') return {ok:true,json:async()=>({configured:true,model:'test'})};
       if (url==='/api/state') return {ok:true,json:async()=>serverState};
+      if (url==='/api/chat' && options.live.turn) return {ok:true,headers:{get:()=> 'application/json'},json:async()=>({...options.live.turn,state:serverState})};
       if ((!request?.method||request.method==='GET') && url.startsWith('/api/history?')) return {ok:true,json:async()=>options.live.historyPage};
       if ((!request?.method||request.method==='GET') && url.startsWith('/api/history/')) return {ok:true,json:async()=>({day:options.live.historyDay})};
       if (request?.method==='DELETE') return options.live.deleteResponse;
@@ -175,4 +177,49 @@ test('live History loads older dates and full conversation on demand without mis
   await today.click('history-day',{day:oldDate});
   assert.match(today.app.innerHTML,/以前的反馈/);
   assert.match(today.app.innerHTML,/历史思考文本/);
+});
+
+
+test('a recorded meal produces plain daily feedback and an expandable coach explanation', () => {
+  const today=openToday();today.click('example','刚吃了两个鸡蛋');
+  assert.match(today.app.innerHTML,/今天吃得怎么样/);
+  assert.match(today.app.innerHTML,/今天蛋白质已完成/);
+  assert.match(today.app.innerHTML,/class="record-impact/);
+  assert.match(today.app.innerHTML,/<details class="coach-explanation">/);
+  assert.match(today.app.innerHTML,/下一顿这样吃/);
+  assert.match(today.app.innerHTML,/未记录/);
+});
+
+test('history leads with meals and collapses the original transcript without repeating receipt cards', () => {
+  const today=openToday();today.click('example','刚吃了两个鸡蛋');today.click('history-day',{day:'today'});
+  assert.match(today.app.innerHTML,/今天吃了什么/);
+  assert.match(today.app.innerHTML,/<details class="history-conversation" >/);
+  assert.match(today.app.innerHTML,/查看原始交流/);
+  assert.doesNotMatch(today.app.innerHTML,/class="receipt"/);
+  assert.match(today.app.innerHTML,/message-record-reference/);
+  assert.match(today.app.innerHTML,/<details class="nutrition-extra">/);
+});
+
+test('history summaries retain historical targets and missing targets stay explicit', () => {
+  const day='2026-08-01',meal={id:'old',type:'晚餐',name:'历史晚餐',calories:1900,protein:80,carbs:100,fat:50,fiber:5};
+  const oldPlan={caloriesMin:1800,caloriesMax:2000,proteinTarget:80,carbsTarget:200,fatTarget:60};
+  const make=plan=>openToday({saved:{archives:{[day]:{meals:[meal],messages:[],plan}},activeDate:new Date().toLocaleDateString('sv-SE')}});
+  const old=make(oldPlan);old.click('history-day',{day});
+  assert.match(old.app.innerHTML,/记录里的热量和蛋白质都接近计划/);
+  assert.match(old.app.innerHTML,/建议 1,800–2,000 kcal/);
+  const unknown=make(null);unknown.click('history-day',{day});
+  assert.match(unknown.app.innerHTML,/无当日目标/);
+  assert.doesNotMatch(unknown.app.innerHTML,/NaN|Infinity/);
+});
+
+test('backdated meal confirmation never claims the meal increased today progress',async()=>{
+  const meal={id:'past-meal',name:'昨天的燕麦',type:'午餐',calories:300,protein:14,carbs:48,fat:8,fiber:5};
+  const date='2026-08-01';
+  const today=openToday({live:{state:{archives:{[date]:{meals:[meal],messages:[],calories:300,protein:14}}},turn:{assistantMessage:{role:'assistant',live:true,text:'已补记这一天',receipt:meal,after:'所补日期累计约 300 kcal。'}}}});
+  await new Promise(resolve=>setImmediate(resolve));
+  await today.click('example','昨天吃了燕麦');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(today.app.innerHTML,/对应日期的记录已更新/);
+  assert.doesNotMatch(today.app.innerHTML,/class="record-impact/);
+  assert.equal(today.proteinFill(),0);
 });

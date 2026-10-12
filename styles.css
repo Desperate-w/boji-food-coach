@@ -61,7 +61,7 @@ html, body { margin: 0; min-height: 100%; }
 body { color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased; }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #9ac6ad; outline-offset: 3px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #9ac6ad; outline-offset: 3px; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
@@ -105,21 +105,40 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .chat-response .welcome-block { width: min(100%, 760px); margin-inline: auto; }
 .conversation-column { width: min(100%, 760px); margin: 0 auto; }
 .today-card { background: var(--surface); border: 1px solid #e9ede8; border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; margin: 4px 0 34px; }
-.today-main { padding: 25px 29px 24px; }
-.today-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 21px; }
+.today-main { padding: 22px 26px; }
+.today-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.day-kicker { color: #52675b; font-size: 13px; font-weight: 650; }
+.day-headline { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: clamp(20px, 2vw, 26px); line-height: 1.5; letter-spacing: -.035em; font-weight: 650; margin: 0 0 22px; text-wrap: pretty; }
+.status-badge.tone-neutral { color: #5c6d62; background: #f0f3ef; }
+.status-badge.tone-attention { color: #92592d; background: #faf0e2; }
+.day-next-step { display: flex; align-items: flex-start; gap: 10px; border-radius: 13px; padding: 14px 16px; margin-top: 18px; background: var(--accent-soft); }
+.day-next-step > svg { width: 18px; height: 18px; color: var(--accent); margin-top: 2px; }
+.day-next-step span { font-size: 11px; font-weight: 650; color: var(--accent); }
+.day-next-step p { margin: 5px 0 0; font-size: 14px; line-height: 1.7; color: #344e40; }
+.day-note { margin: 12px 0 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.meal-coverage { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 19px; }
+.coverage-slot { display: flex; align-items: center; gap: 7px; color: #869288; font-size: 12px; }
+.coverage-slot > svg, .coverage-slot > i { flex: none; width: 17px; height: 17px; }
+.coverage-slot > i { border: 1px solid #dce4dd; border-radius: 50%; }
+.coverage-slot small { display: block; font-size: 10px; color: #7c8980; margin-top: 2px; }
+.coverage-slot.recorded { color: var(--accent); font-weight: 650; }
+.today-log-meta { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 14px 20px; margin-top: 18px; }
+.today-log-meta .meal-coverage { flex: 1 1 390px; max-width: 540px; margin-top: 0; }
+.today-log-meta .day-note { margin: 0; }
 .eyebrow { color: #89958b; font-size: 10px; letter-spacing: .16em; font-weight: 700; text-transform: uppercase; }
 .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 700; border-radius: 99px; white-space: nowrap; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .today-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-.today-stat { min-width: 0; }
+.today-stat { min-width: 0; background: #f7f9f6; border-radius: 14px; padding: 12px 16px; }
+.stat-interpretation { color: #52675b; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
 .stat-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-.stat-value { display: flex; align-items: baseline; gap: 5px; font-size: 36px; font-weight: 700; letter-spacing: -.07em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-value { display: flex; align-items: baseline; gap: 5px; font-size: 32px; font-weight: 700; letter-spacing: -.07em; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .stat-unit { font-size: 13px; letter-spacing: 0; color: #6e7970; font-weight: 500; }
 .stat-sub { font-size: 12px; color: #859187; margin-top: 8px; }
 .protein-value { font-size: 29px; padding-top: 5px; letter-spacing: -.05em; }
 .protein-value .slash { color: #acb7ae; margin: 0 2px; font-size: 23px; font-weight: 400; }
 .protein-value .target { color: #859187; font-size: 23px; }
-.range-track, .protein-track { position: relative; height: 7px; margin-top: 20px; border-radius: 20px; background: #e8ede8; overflow: hidden; }
+.range-track, .protein-track { position: relative; height: 7px; margin-top: 14px; border-radius: 20px; background: #e8ede8; overflow: hidden; }
 .range-target { position: absolute; z-index: 1; top: 0; bottom: 0; left: 79%; width: 9%; border: 1px solid #79ad89; border-radius: 20px; background: rgba(159, 203, 176, .55); }
 .range-fill, .protein-fill { height: 100%; border-radius: 20px; background: var(--accent); max-width: 100%; transition: width .4s ease; }
 .range-track.is-over .range-fill { background: var(--amber); }
@@ -155,6 +174,26 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .welcome-block p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .feedback-panel { background: var(--surface); border: 1px solid #e5ebe3; border-radius: 18px; padding: 18px 20px 19px; }
 .feedback-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+.record-feedback-label { display: flex; align-items: center; gap: 6px; margin: 0 0 12px; font-size: 13px; font-weight: 650; color: var(--accent); }
+.record-feedback-label svg { width: 17px; height: 17px; }
+.record-feedback .receipt { max-width: none; margin: 0; box-shadow: none; border-radius: 13px; }
+.record-feedback .receipt-top { padding: 15px 18px 12px; }
+.record-feedback .receipt-values { padding: 13px 18px; }
+.record-feedback .receipt-foot { padding: 10px 18px; }
+.record-impact { border-left: 3px solid #81b89a; padding: 3px 0 3px 16px; margin: 20px 0; }
+.record-impact.tone-attention { border-left-color: #c69254; }
+.record-impact > span { color: var(--muted); font-size: 11px; }
+.record-impact h3 { margin: 7px 0 13px; color: var(--ink); font-size: 17px; line-height: 1.6; font-weight: 650; }
+.record-impact-progress { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: #536b5d; font-size: 12px; }
+.record-impact .protein-track { margin-top: 9px; height: 6px; }
+.record-impact > p { display: flex; align-items: baseline; gap: 10px; margin: 12px 0 0; font-size: 13px; line-height: 1.7; color: #52675b; }
+.record-impact > p > strong { flex: none; font-size: 11px; color: var(--accent); }
+.coach-explanation { border-top: 1px solid var(--line); padding-top: 13px; }
+.coach-explanation summary, .nutrition-extra summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; list-style: none; cursor: pointer; color: #65786b; font-size: 12px; }
+.coach-explanation summary::-webkit-details-marker, .nutrition-extra summary::-webkit-details-marker, .history-conversation summary::-webkit-details-marker { display: none; }
+.coach-explanation summary svg, .nutrition-extra summary svg { width: 15px; height: 15px; }
+.coach-explanation[open] > summary > svg, .nutrition-extra[open] > summary > svg, .history-conversation[open] > summary > svg { transform: rotate(180deg); }
+.coach-explanation > div { font-size: 14px; line-height: 1.8; padding-top: 10px; color: #65756b; overflow-wrap: anywhere; }
 /* Thinking and completed reasoning share the composer’s content width. */
 .thinking-panel { background: var(--surface); border: 1px solid #dfe8e0; border-radius: 22px; padding: 24px; box-shadow: 0 8px 24px rgba(29,50,35,.04); }
 .thinking-row { display: flex; align-items: center; gap: 11px; color: var(--ink); font-size: 15px; }
@@ -303,6 +342,14 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .meal-row > span { font-size: 12px; font-weight: 700; color: #5c6b60; white-space: nowrap; }
 .history-ai { background: var(--accent-soft); color: #466457; border-radius: 13px; margin-top: 23px; padding: 15px 16px; font-size: 12px; line-height: 1.65; }
 .history-conversation { border-top: 1px solid var(--line); margin-top: 29px; padding-top: 27px; }
+.history-conversation > summary { display: flex; align-items: center; justify-content: space-between; gap: 15px; list-style: none; cursor: pointer; padding: 1px 0; }
+.history-conversation > summary strong { display: block; color: #435e4e; font-size: 14px; font-weight: 600; }
+.history-conversation > summary small { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.history-conversation > summary svg { width: 17px; height: 17px; color: #708575; }
+.history-conversation .conversation-note { margin: 20px 0 0; font-size: 12px; line-height: 1.7; }
+.message-record-reference { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 0; font-size: 12px; color: var(--accent); }
+.message-record-reference > svg { width: 14px; height: 14px; }
+.message-record-reference .text-button { margin-left: auto; }
 .history-conversation .message-list { width: min(100%, 760px); margin: 21px auto 0; gap: 20px; }
 .history-conversation .message.user { padding-left: 35px; }
 .history-conversation .receipt { box-shadow: none; }
@@ -311,6 +358,20 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .history-detail .history-nutrition { border: 0; border-radius: 0; padding: 0; }
 .history-nutrition-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .history-nutrition-head h3 { font-size: 18px; letter-spacing: -.04em; margin: 8px 0 0; }
+.history-nutrition .day-headline { font-size: 21px; margin: 0 0 22px; }
+.history-key-metric { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px; margin-top: 19px; }
+.history-key-metric > div > span { color: #52675b; font-size: 12px; }
+.history-key-metric strong { display: block; margin-top: 8px; font-size: 29px; letter-spacing: -.045em; font-weight: 650; font-variant-numeric: tabular-nums; }
+.history-key-metric strong small { font-size: 14px; letter-spacing: 0; font-weight: 400; color: var(--muted); }
+.history-key-metric > small { color: var(--muted); font-size: 11px; padding-bottom: 4px; }
+.history-nutrition .day-note { margin-top: 12px; font-size: 11px; line-height: 1.6; }
+.history-nutrition .day-next-step p { margin-top: 5px; color: #344e40; font-size: 14px; line-height: 1.7; }
+.history-nutrition .progress-caption { margin: 8px 0 0; font-size: 11px; color: #65786b; }
+.history-progress-pair { display: grid; gap: 0; }
+.history-progress-metric { min-width: 0; }
+.nutrition-extra { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; }
+.nutrition-extra .history-macro-grid { margin-top: 14px; }
+.history-detail .nutrition-extra .history-nutrition-note { margin-top: 12px; }
 .history-macro-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; }
 .history-macro { grid-column: span 2; min-width: 0; border: 1px solid #e9eee8; background: #fafcf9; border-radius: 12px; padding: 12px 13px; }
 .history-macro.primary { grid-column: span 3; background: #f2f7f2; border-color: #deeadf; }
@@ -326,6 +387,33 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .history-detail .meal-board { border: 0; border-left: 1px solid var(--line); border-radius: 0; padding: 0 0 0 24px; }
 .meal-board-heading { margin-bottom: 17px; }
 .meal-board-heading p { color: var(--muted); font-size: 11px; margin: 8px 0 0; line-height: 1.6; }
+.meal-board-heading h2 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -.03em; }
+.diary-board .meal-slot-grid { grid-template-columns: 1fr; gap: 0; }
+.diary-board .meal-slot { padding: 15px 0 15px 15px; border: 0; border-left: 2px solid #e5ebe3; border-radius: 0; background: none; }
+.diary-board .meal-slot.has-records { border-left-color: #79a68a; }
+.diary-board .meal-slot + .meal-slot { border-top: 1px solid #edf0ec; }
+.diary-board .meal-slot-heading { padding-bottom: 0; border-bottom: 0; }
+.diary-board .meal-slot-heading h3 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 9px; font-size: 14px; }
+.diary-board .meal-slot-heading h3 small { font-size: 10px; font-weight: 400; color: var(--muted); }
+.diary-board .meal-slot-empty { padding-top: 8px; line-height: 1.6; color: #87958a; }
+.diary-board .meal-entry { border: 0; padding-top: 13px; }
+.diary-board .meal-entry-top { align-items: baseline; }
+.diary-board .meal-foods > span { padding: 0; background: none; border: 0; border-radius: 0; font-size: 12px; line-height: 1.7; }
+.diary-board .meal-foods > span + span::before { content: '·'; margin-right: 6px; color: #a2afa4; }
+.history-archive-heading { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin: 30px 0 16px; }
+.history-archive-heading h2 { font-size: 19px; font-weight: 650; margin: 0; }
+.history-archive-heading > span { color: var(--muted); font-size: 11px; }
+.journal-day { align-items: flex-start; }
+.journal-day .history-info { min-width: 0; }
+.journal-day .history-info > strong { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.history-record-count { font-size: 10px; font-weight: 400; color: var(--muted); }
+.history-day-verdict { display: block; font-size: 13px; line-height: 1.7; margin-top: 10px; color: #47664f; }
+.history-day-verdict.tone-attention { color: #92592d; }
+.history-day-verdict.tone-neutral { color: #596e60; }
+.journal-day .history-day-numbers { color: #5d7264; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.history-day-numbers > span { margin-left: 8px; }
+.journal-day .history-food-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.journal-day > svg { align-self: center; }
 .meal-slot-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
 .meal-slot { min-width: 0; border: 1px solid #e7ece5; background: #fdfefd; border-radius: 14px; padding: 15px; }
 .meal-slot-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid #ebefea; }
@@ -567,6 +655,14 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .today-card { margin-bottom: 30px; border-radius: 21px; }
   .today-main { padding: 21px 20px; }
   .today-stats { gap: 9px; }
+  .today-stat { padding: 14px 12px; }
+  .stat-interpretation { font-size: 12px; line-height: 1.6; }
+  .day-headline { font-size: 21px; margin-bottom: 17px; }
+  .day-next-step { padding: 12px; }
+  .day-next-step p { font-size: 13px; }
+  .meal-coverage { gap: 5px; }
+  .coverage-slot { gap: 4px; font-size: 11px; }
+  .coverage-slot > svg, .coverage-slot > i { width: 14px; height: 14px; }
   .today-meal { display: block; }
   .today-meal-values { display: block; margin-top: 4px; }
   .stat-value { font-size: 31px; }
@@ -594,8 +690,30 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .page-heading h1 { font-size: 25px; }
   .profile-grid { grid-template-columns: 1fr; }
   .history-detail { padding: 20px; }
+  .history-detail-actions { flex-wrap: wrap; }
+  .history-detail-actions > strong { font-size: 13px; }
+  .history-card { padding: 16px; gap: 12px; }
+  .history-date { width: 40px; padding-right: 12px; flex: none; }
   .history-nutrition, .meal-board { padding: 19px 17px; }
+  .history-nutrition .day-headline { font-size: 18px; margin-bottom: 10px; }
+  .history-progress-pair { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .history-key-metric { display: block; margin-top: 12px; }
+  .history-key-metric > div > span { font-size: 11px; line-height: 1.6; }
+  .history-key-metric strong { font-size: 26px; margin: 6px 0; }
+  .history-key-metric strong small { font-size: 12px; }
+  .history-key-metric > small { display: block; font-size: 9px; }
+  .history-nutrition .progress-caption { font-size: 10px; }
+  .history-nutrition .day-next-step { margin-top: 15px; }
+  .history-nutrition .day-next-step p { font-size: 12px; }
+  .history-nutrition .day-note { font-size: 10px; }
   .meal-slot-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 380px) {
+  .today-stats { grid-template-columns: 1fr; }
+  .today-stat { padding: 14px; }
+  .record-impact-progress { font-size: 11px; }
+  .history-key-metric strong { font-size: 22px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
