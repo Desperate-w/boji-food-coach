@@ -57,13 +57,71 @@
     };
   }
 
+  function dayEncouragement({meals,plan,calories,protein,isToday,date,moment}) {
+    if (!meals.length) return {encouragement:'',encouragementKind:'none'};
+    const day=isToday?'今天':'这一天';
+    const types=new Set(meals.map(meal=>meal.type));
+    const threeMeals=['早餐','午餐','晚餐'].every(type=>types.has(type));
+    let kind;
+    if (moment==='correction') kind='correction';
+    else if (moment==='backfill') kind='backfill';
+    else if (threeMeals) kind='three-meals';
+    else if (meals.length===1) kind='first';
+    else if (plan && calories>plan.caloriesMax) kind='honest-record';
+    else if (plan && calories>=plan.caloriesMin && protein>=plan.proteinTarget-8) kind='on-plan';
+    else kind='keep-recording';
+    const messages={
+      first:[
+        '这一餐记下来了，照顾自己有了一个小小的起点。做得不错。',
+        '这一餐的记录已经留下了，给愿意花这份心思的自己一点肯定。',
+        '记下一餐，就是认真照顾自己的一个小动作。慢慢来就很好。',
+      ],
+      'three-meals':[
+        `${day}的三餐都有记录了，这份认真，值得你给自己一点肯定。`,
+        '早餐、午餐和晚餐都留下记录了。能为自己花这份心思，做得不错。',
+        `${day}你认真记下了三餐，对自己的这份用心也值得被看见。`,
+      ],
+      'honest-record':[
+        '愿意如实记下吃过的食物，这份认真值得肯定。按自己的节奏慢慢调整。',
+        `${day}的数字有些波动，也不影响这份记录的价值。愿意记下来，做得不错。`,
+        '把真实吃过的食物记下来，就多了一份了解自己的依据。给这份认真一点肯定。',
+      ],
+      'on-plan':[
+        '这份贴近计划的记录，是认真照顾自己的小小成果。给自己一点肯定。',
+        '这些小小的选择，让记录更贴近你的计划了。做得不错，继续按自己的节奏来。',
+        '你为自己做的这些小选择，值得一句“做得不错”。轻松一点，慢慢来。',
+      ],
+      'keep-recording':[
+        '愿意把吃过的食物认真记下来，已经是在好好照顾自己。按自己的节奏就好。',
+        '一餐一餐留下记录，你对自己吃过什么也更清楚了。慢慢调整就很好。',
+        '又为自己的饮食留下一点清楚的记录了。这份用心，值得被肯定。',
+      ],
+      correction:[
+        '你愿意核对实际份量，这份认真值得肯定。按真实情况记录就很好。',
+        '这顿已经按你的说明改好了，愿意认真核对，也是在照顾自己。',
+        '谢谢你把实际吃过的份量说清楚。愿意调整记录，这件事本身就做得不错。',
+      ],
+      backfill:[
+        '这顿补记好了，愿意回来补上，也是认真照顾自己的一个小动作。',
+        '又补上了一份真实的饮食记录，给这份用心一点肯定。',
+        '愿意把之前吃过的食物补记下来，也值得一句“做得不错”。',
+      ],
+    };
+    // Stable across rerenders; dates and newly confirmed records add gentle variety.
+    let hash=0;
+    for (const char of `${date}|${kind}|${meals.length}|${moment}`) hash=(hash*31+char.charCodeAt(0))>>>0;
+    const variants=messages[kind];
+    return {encouragement:variants[hash%variants.length],encouragementKind:kind};
+  }
+
   // Explain confirmed totals, without treating an unfinished food log as a full day.
-  function describeDay({totals={},plan,meals=[],isToday=true}={}) {
+  function describeDay({totals={},plan,meals=[],isToday=true,date='',moment='day'}={}) {
     const calories=Math.max(0,Number(totals.calories)||0),protein=Math.max(0,Number(totals.protein)||0);
     const hasPlan=Boolean(plan && Number.isFinite(plan.caloriesMin) && plan.caloriesMin>0 &&
       Number.isFinite(plan.caloriesMax) && plan.caloriesMax>=plan.caloriesMin && Number.isFinite(plan.proteinTarget) && plan.proteinTarget>0);
     const note=isToday?'仅按已记录的食物估算，漏记的可以随时补上。':'只根据已记录食物汇总，漏记会影响这一天的结果。';
-    const base={hasPlan,note,tone:'neutral',badge:isToday?'正在记录':'记录反馈',proteinGap:0,proteinPercent:0};
+    const base={hasPlan,note,tone:'neutral',badge:isToday?'正在记录':'记录反馈',proteinGap:0,proteinPercent:0,
+      ...dayEncouragement({meals,plan:hasPlan?plan:null,calories,protein,isToday,date,moment})};
     if (!meals.length) return {...base,badge:'待记录',headline:isToday?'从第一顿开始，看懂今天怎么吃。':'这一天还没有餐食记录。',calorieLabel:'等待第一顿记录',proteinLabel:'等待第一顿记录',next:'吃过的食物都可以补记，记录后这里会更新。'};
     if (!hasPlan) return {...base,badge:'无当日目标',headline:`这一天记下了 ${meals.length} 笔餐食。`,calorieLabel:'已记录的热量',proteinLabel:'已记录的蛋白质',next:'没有保存这一天的目标，先查看或补齐吃过的食物。'};
     const proteinGap=Math.max(0,plan.proteinTarget-protein),proteinPercent=Math.min(100,Math.max(0,Math.round(protein/plan.proteinTarget*100)));

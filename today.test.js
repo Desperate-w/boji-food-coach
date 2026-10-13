@@ -223,3 +223,18 @@ test('backdated meal confirmation never claims the meal increased today progress
   assert.doesNotMatch(today.app.innerHTML,/class="record-impact/);
   assert.equal(today.proteinFill(),0);
 });
+
+test('visible meal feedback praises recording and correction rather than waiting for nutrition targets',()=>{
+  const today=openToday();assert.doesNotMatch(today.app.innerHTML,/class="day-encouragement"/);
+  today.click('example','两个鸡蛋多少热量？');assert.doesNotMatch(today.app.innerHTML,/class="day-encouragement"/);
+  today.click('example','刚吃了两个鸡蛋');assert.match(today.app.innerHTML,/data-encouragement-kind="first"/);
+  today.click('example','其实鸡蛋只吃了一半');assert.match(today.app.innerHTML,/data-encouragement-kind="correction"/);
+});
+
+test('today and historical day summaries recognize three meal types without claiming the whole day is complete',()=>{
+  const meals=['早餐','午餐','晚餐'].map((type,i)=>({id:`meal-${i}`,type,name:type,calories:300,protein:10,carbs:40,fat:8,fiber:3}));
+  const date='2026-08-01',today=openToday({saved:{meals,archives:{[date]:{meals,messages:[]}},activeDate:new Date().toLocaleDateString('sv-SE')}});
+  assert.match(today.app.innerHTML,/data-encouragement-kind="three-meals"/);
+  today.click('history-day',{day:date});assert.match(today.app.innerHTML,/data-encouragement-kind="three-meals"/);
+  assert.doesNotMatch(today.app.innerHTML,/所有食物都已记录|全天记录完整|连续记录/);
+});

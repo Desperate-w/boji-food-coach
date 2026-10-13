@@ -11,6 +11,7 @@
     mic: '<rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8"/>',
     send: '<path d="m4 12 16-8-4 16-4-7-8-1Z"/><path d="m12 13 8-9"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
+    heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/>',
     camera: '<path d="M4 7h4l2-2h4l2 2h4v12H4V7Z"/><circle cx="12" cy="13" r="3"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1"/><path d="m21 16-5-5L5 21"/>',
     close: '<path d="M5 5 19 19M19 5 5 19"/>',
@@ -161,7 +162,7 @@
   }
   function renderToday() {
     const t=totals(), p=state.profile;
-    const feedback=nutrition.describeDay({totals:t,plan:p,meals:state.meals});
+    const feedback=nutrition.describeDay({totals:t,plan:p,meals:state.meals,date:state.activeDate});
     const calorieScale=Math.max(1,p.caloriesMax+300);
     const caloriePct=Math.min(100,Math.max(0,Math.round(t.calories/calorieScale*100)));
     const targetStart=Math.min(100,Math.max(0,Math.round(p.caloriesMin/calorieScale*100)));
@@ -173,7 +174,7 @@
     const mealRows=state.meals.map(meal=>`<li class="today-meal"><span class="today-meal-name">${escapeHtml(meal.type||'餐食')} · ${escapeHtml(meal.name||'一顿饮食')}</span><span class="today-meal-values">${fmt(meal.calories||0)} kcal <span aria-hidden="true">·</span> 蛋白质 ${fmt(meal.protein||0)}g</span></li>`).join('');
     return `<section class="today-card ${state.expanded?'expanded':''}" aria-label="今日饮食状态">
       <div class="today-main"><div class="today-heading"><span class="day-kicker">今天吃得怎么样</span><span class="status-badge tone-${feedback.tone}"><span class="status-dot"></span>${escapeHtml(feedback.badge)}</span></div>
-      <h2 class="day-headline" aria-live="polite">${escapeHtml(feedback.headline)}</h2>
+      <h2 class="day-headline ${feedback.encouragement?'with-encouragement':''}" aria-live="polite">${escapeHtml(feedback.headline)}</h2>${renderEncouragement(feedback)}
       <div class="today-stats"><div class="today-stat ${t.calories>p.caloriesMax?'is-over':''}"><div class="stat-label stat-interpretation">${escapeHtml(feedback.calorieLabel)}</div><div class="stat-value">${fmt(t.calories)}<span class="stat-unit">kcal</span></div><div class="stat-sub">今日建议 ${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal</div>
       <div class="range-track ${t.calories>p.caloriesMax?'is-over':''}" role="img" aria-label="热量 ${fmt(t.calories)} 千卡，建议范围 ${fmt(p.caloriesMin)} 到 ${fmt(p.caloriesMax)} 千卡"><div class="range-target" style="left:${targetStart}%;width:${targetWidth}%"></div><div class="range-fill" style="width:${caloriePct}%"></div></div><div class="progress-caption">${calorieProgress}</div></div>
       <div class="today-stat"><div class="stat-label stat-interpretation">${escapeHtml(feedback.proteinLabel)}</div><div class="stat-value protein-value">${fmt(t.protein)}<span class="slash">/</span><span class="target">${fmt(p.proteinTarget)}</span><span class="stat-unit">g</span></div><div class="stat-sub">已摄入 / 今日蛋白质目标</div>
@@ -189,6 +190,9 @@
       const recorded=meals.some(meal=>meal.type===type || type==='加餐'&&!['早餐','午餐','晚餐','加餐'].includes(meal.type));
       return `<span class="coverage-slot ${recorded?'recorded':''}">${recorded?icon('check'):'<i aria-hidden="true"></i>'}<span>${type}<small>${recorded?'已记录':type==='加餐'?'可选':'未记录'}</small></span></span>`;
     }).join('')}</div>`;
+  }
+  function renderEncouragement(feedback) {
+    return feedback.encouragement?`<p class="day-encouragement" data-encouragement-kind="${feedback.encouragementKind}">${icon('heart')}<span>${escapeHtml(feedback.encouragement)}</span></p>`:'';
   }
   function renderReceipt(r, revised=false, showEdit=true) {
     return `<div class="receipt"><div class="receipt-top"><div><div class="receipt-label">${icon('check')}${revised?'已更新':'已记录'}${escapeHtml(r.type)}</div><div class="receipt-title">${escapeHtml(r.name)}</div></div><div class="receipt-time">${escapeHtml(r.time||'刚刚')}</div></div>
@@ -220,8 +224,9 @@
     const current=state.meals.find(meal=>meal.id===m.receipt.id);
     const r=current||m.latestReceipt||m.receipt;
     const onToday=Boolean(current);
-    const feedback=onToday?nutrition.describeDay({totals:totals(),plan:state.profile,meals:state.meals}):null;
-    const impact=feedback?`<div class="record-impact tone-${feedback.tone}"><span>今天吃到这里</span><h3>${escapeHtml(feedback.headline)}</h3><div class="record-impact-progress"><span>今天蛋白质已完成 <strong>${feedback.proteinPercent}%</strong></span><span>${feedback.proteinGap>8?`还差约 ${fmt(feedback.proteinGap)}g`:'基本达到目标'}</span></div><div class="protein-track" role="progressbar" aria-label="记录后的蛋白质进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${feedback.proteinPercent}"><div class="protein-fill" style="width:${feedback.proteinPercent}%"></div></div><p><strong>下一顿</strong>${escapeHtml(feedback.next)}</p></div>`:'';
+    const feedback=onToday?nutrition.describeDay({totals:totals(),plan:state.profile,meals:state.meals,date:state.activeDate,moment:m.revised?'correction':'record'}):null;
+    const praise=feedback||nutrition.describeDay({meals:[r],isToday:false,date:state.activeDate,moment:m.revised?'correction':'backfill'});
+    const impact=feedback?`<div class="record-impact tone-${feedback.tone}"><span>今天吃到这里</span><h3>${escapeHtml(feedback.headline)}</h3>${renderEncouragement(praise)}<div class="record-impact-progress"><span>今天蛋白质已完成 <strong>${feedback.proteinPercent}%</strong></span><span>${feedback.proteinGap>8?`还差约 ${fmt(feedback.proteinGap)}g`:'基本达到目标'}</span></div><div class="protein-track" role="progressbar" aria-label="记录后的蛋白质进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${feedback.proteinPercent}"><div class="protein-fill" style="width:${feedback.proteinPercent}%"></div></div><p><strong>下一顿</strong>${escapeHtml(feedback.next)}</p></div>`:renderEncouragement(praise);
     return `<div class="record-feedback"><p class="record-feedback-label">${icon('check')}${onToday?'今日记录已更新':'对应日期的记录已更新'}</p>${renderReceipt(r,m.revised)}${impact}<details class="coach-explanation"><summary>查看教练的建议 ${icon('down')}</summary><div>${renderRichText(m.text)}${!onToday&&m.after?renderRichText(m.after):''}</div></details>${renderReasoning(m)}</div>`;
   }
   function renderComposer() {
@@ -265,7 +270,7 @@
     return meals.reduce((sum,meal)=>({calories:sum.calories+(meal.calories||0),protein:sum.protein+(meal.protein||0),carbs:sum.carbs+(meal.carbs||0),fat:sum.fat+(meal.fat||0),fiber:sum.fiber+(meal.fiber||0)}),{calories:0,protein:0,carbs:0,fat:0,fiber:0});
   }
   function renderHistoryNutrition(d) {
-    const feedback=nutrition.describeDay({totals:d,plan:d.plan,meals:d.meals,isToday:d.date===state.activeDate});
+    const feedback=nutrition.describeDay({totals:d,plan:d.plan,meals:d.meals,isToday:d.date===state.activeDate,date:d.date});
     const p=feedback.hasPlan?d.plan:null;
     const calorieText=p?(d.meals.length?d.calories<p.caloriesMin?`距建议下限 ${fmt(p.caloriesMin-d.calories)} kcal`:d.calories<=p.caloriesMax?'处于建议范围':`高出建议上限 ${fmt(d.calories-p.caloriesMax)} kcal`:'等待第一顿记录'):'暂无该日目标';
     const proteinText=p?(d.meals.length?d.protein>=p.proteinTarget?'已达到目标':`完成 ${Math.round(d.protein/Math.max(1,p.proteinTarget)*100)}% · 还差 ${fmt(p.proteinTarget-d.protein)}g`:'等待第一顿记录'):'暂无该日目标';
@@ -274,7 +279,7 @@
     const targetStart=p?Math.min(100,Math.max(0,Math.round(p.caloriesMin/scale*100))):0;
     const targetWidth=p?Math.max(1,Math.min(100-targetStart,Math.round((p.caloriesMax-p.caloriesMin)/scale*100))):0;
     const proteinPct=p?Math.min(100,Math.max(0,Math.round(d.protein/Math.max(1,p.proteinTarget)*100))):0;
-    return `<section class="history-nutrition" aria-label="${escapeHtml(d.title)}营养汇总"><div class="history-nutrition-head"><span class="day-kicker">${escapeHtml(d.title)}的记录反馈</span><span class="status-badge tone-${feedback.tone}"><span class="status-dot"></span>${escapeHtml(feedback.badge)}</span></div><h2 class="day-headline">${escapeHtml(feedback.headline)}</h2><div class="history-progress-pair">
+    return `<section class="history-nutrition" aria-label="${escapeHtml(d.title)}营养汇总"><div class="history-nutrition-head"><span class="day-kicker">${escapeHtml(d.title)}的记录反馈</span><span class="status-badge tone-${feedback.tone}"><span class="status-dot"></span>${escapeHtml(feedback.badge)}</span></div><h2 class="day-headline ${feedback.encouragement?'with-encouragement':''}">${escapeHtml(feedback.headline)}</h2>${renderEncouragement(feedback)}<div class="history-progress-pair">
       <div class="history-progress-metric"><div class="history-key-metric"><div><span>${escapeHtml(feedback.calorieLabel)}</span><strong>${fmt(d.calories)} <small>kcal</small></strong></div><small>${p?`建议 ${fmt(p.caloriesMin)}–${fmt(p.caloriesMax)} kcal`:'未保存当日目标'}</small></div>
       ${p?`<div class="range-track ${d.calories>p.caloriesMax?'is-over':''}" role="img" aria-label="热量 ${fmt(d.calories)} 千卡，建议范围 ${fmt(p.caloriesMin)} 到 ${fmt(p.caloriesMax)} 千卡"><div class="range-target" style="left:${targetStart}%;width:${targetWidth}%"></div><div class="range-fill" style="width:${caloriePct}%"></div></div>`:''}<p class="progress-caption">${calorieText}</p></div>
       <div class="history-progress-metric"><div class="history-key-metric"><div><span>${escapeHtml(feedback.proteinLabel)}</span><strong>${fmt(d.protein)} <small>${p?`/ ${fmt(p.proteinTarget)} `:''}g</small></strong></div><small>蛋白质进度</small></div>

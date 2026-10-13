@@ -72,3 +72,38 @@ test("history feedback uses that day's plan and never invents a missing target",
   assert.equal(describeDay({plan:{caloriesMin:0,caloriesMax:2000,proteinTarget:0},meals}).hasPlan,false);
   assert.equal(describeDay({plan:calculate(person),meals:[]}).badge,'待记录');
 });
+
+test('encouragement recognizes recorded breakfast lunch and dinner even before nutrition targets are reached',()=>{
+  const plan=calculate(person),meals=['早餐','午餐','晚餐'].map(type=>({type}));
+  const feedback=context.window.BojiNutrition.describeDay({plan,meals,totals:{calories:900,protein:35},date:'2026-10-13'});
+  assert.equal(feedback.encouragementKind,'three-meals');assert.match(feedback.encouragement,/三餐|早餐、午餐和晚餐/);
+  assert.equal(feedback.tone,'neutral');assert.equal(feedback.proteinGap,85);
+  const snacks=context.window.BojiNutrition.describeDay({plan,meals:[{type:'加餐'},{type:'加餐'},{type:'加餐'}]});
+  assert.notEqual(snacks.encouragementKind,'three-meals');
+});
+
+test('encouragement stays positive for over-target days without hiding the nutrition result',()=>{
+  const describeDay=context.window.BojiNutrition.describeDay,plan=calculate(person),meals=[{type:'午餐'},{type:'加餐'}];
+  for (const date of ['2026-10-10','2026-10-11','2026-10-12']) {
+    const feedback=describeDay({plan,meals,totals:{calories:3000,protein:50},isToday:false,date});
+    assert.equal(feedback.tone,'attention');assert.equal(feedback.encouragementKind,'honest-record');
+    assert.ok(feedback.encouragement.length>0);assert.doesNotMatch(feedback.encouragement,/今天|失败|不自律|管住嘴|瘦了|连续/);
+  }
+});
+
+test('empty days do not receive success praise and edits or backfills recognize the actual action',()=>{
+  const describeDay=context.window.BojiNutrition.describeDay,meals=[{type:'午餐'}];
+  assert.equal(describeDay({meals:[]}).encouragement,'');
+  assert.equal(describeDay({meals}).encouragementKind,'first');
+  assert.equal(describeDay({meals,moment:'correction'}).encouragementKind,'correction');
+  assert.equal(describeDay({meals,isToday:false,moment:'backfill'}).encouragementKind,'backfill');
+});
+
+test('encouragement is stable on refresh and gently varies with the recorded date',()=>{
+  const describeDay=context.window.BojiNutrition.describeDay,meals=['早餐','午餐','晚餐'].map(type=>({type}));
+  const input={meals,date:'2026-10-13'};
+  assert.equal(describeDay(input).encouragement,describeDay(input).encouragement);
+  assert.equal(describeDay(input).encouragement,describeDay({...input,meals:[...meals].reverse()}).encouragement);
+  const variants=new Set(Array.from({length:6},(_,i)=>describeDay({...input,date:`2026-10-${10+i}`}).encouragement));
+  assert.ok(variants.size>1);
+});
