@@ -58,7 +58,7 @@
   }
 
   function dayEncouragement({meals,plan,calories,protein,isToday,date,moment}) {
-    if (!meals.length) return {encouragement:'',encouragementKind:'none'};
+    if (!meals.length) return {encouragement:'',encouragementDetail:'',encouragementContext:'',encouragementSource:null,encouragementKind:'none'};
     const day=isToday?'今天':'这一天';
     const types=new Set(meals.map(meal=>meal.type));
     const threeMeals=['早餐','午餐','晚餐'].every(type=>types.has(type));
@@ -70,48 +70,51 @@
     else if (plan && calories>plan.caloriesMax) kind='honest-record';
     else if (plan && calories>=plan.caloriesMin && protein>=plan.proteinTarget-8) kind='on-plan';
     else kind='keep-recording';
+    const stepSource={label:'大煜健身 · 抖音',url:'https://www.douyin.com/video/7370299486066740495'};
+    const contexts={first:'一餐已记录','three-meals':'三餐都有记录','honest-record':'如实记录','on-plan':'接近计划','keep-recording':'又记下一餐',correction:'记录已修正',backfill:'补记已完成'};
     const messages={
       first:[
-        '这一餐记下来了，照顾自己有了一个小小的起点。做得不错。',
-        '这一餐的记录已经留下了，给愿意花这份心思的自己一点肯定。',
-        '记下一餐，就是认真照顾自己的一个小动作。慢慢来就很好。',
+        ['走过的每一步都算数。','这一餐已记录。你把照顾自己的想法，变成了行动。',stepSource],
+        ['从这一餐，掌握自己的节奏。','记录已经留下，接下来一餐一餐来。这一步，做得漂亮。'],
+        ['给自己一个开始，就从这一餐。','你认真记下了吃过什么。为自己的这份行动，鼓一次掌。'],
       ],
       'three-meals':[
-        `${day}的三餐都有记录了，这份认真，值得你给自己一点肯定。`,
-        '早餐、午餐和晚餐都留下记录了。能为自己花这份心思，做得不错。',
-        `${day}你认真记下了三餐，对自己的这份用心也值得被看见。`,
+        ['走过的每一步都算数。',`${day}的三餐都有记录了。为自己花的这份心思，值得认真庆祝。`,stepSource],
+        ['三餐记下，这份认真很有分量。','早餐、午餐和晚餐都留下了记录。为这份实实在在的行动，鼓掌。'],
+        ['三餐都记下，为自己鼓一次掌。',`${day}你把认真落在了每一餐里。这份投入，值得骄傲。`],
       ],
       'honest-record':[
-        '愿意如实记下吃过的食物，这份认真值得肯定。按自己的节奏慢慢调整。',
-        `${day}的数字有些波动，也不影响这份记录的价值。愿意记下来，做得不错。`,
-        '把真实吃过的食物记下来，就多了一份了解自己的依据。给这份认真一点肯定。',
+        ['一顿的波动，带不走你的主动权。','你如实记下了吃过什么，这份坦诚值得肯定。接下来正常吃饭，按自己的节奏来。'],
+        ['把真实记下来，继续走自己的路。',`${day}的数字高于建议，也不抹去记录的价值。如实面对这一步，做得好。`],
+        ['敢看真实，也是一种力量。','你愿意留下真实的饮食记录。给这份认真一句肯定，下一顿照常安排。'],
       ],
       'on-plan':[
-        '这份贴近计划的记录，是认真照顾自己的小小成果。给自己一点肯定。',
-        '这些小小的选择，让记录更贴近你的计划了。做得不错，继续按自己的节奏来。',
-        '你为自己做的这些小选择，值得一句“做得不错”。轻松一点，慢慢来。',
+        ['这一次，你把计划落在了行动里。','记录中的热量和蛋白质都接近计划。为自己做出的这些选择，值得骄傲。'],
+        ['把目标落到每一餐，做得漂亮。',`${day}的记录接近计划。认真吃饭、好好照顾自己，这份投入值得被看见。`],
+        ['认真做出的选择，值得你骄傲。','热量和蛋白质接近计划了。给自己一个肯定，接下来按食欲正常吃。'],
       ],
       'keep-recording':[
-        '愿意把吃过的食物认真记下来，已经是在好好照顾自己。按自己的节奏就好。',
-        '一餐一餐留下记录，你对自己吃过什么也更清楚了。慢慢调整就很好。',
-        '又为自己的饮食留下一点清楚的记录了。这份用心，值得被肯定。',
+        ['一餐一餐来，自己的节奏自己掌握。','又记下一餐，你更清楚自己吃过什么了。为这份行动，加把劲。'],
+        ['把认真，留在每一餐里。','吃过的食物又多了一份清楚的记录。你愿意为自己花心思，这就值得肯定。'],
+        ['记录在继续，主动权在你手里。','这一餐也记好了。一步一步了解自己的饮食，做得漂亮。'],
       ],
       correction:[
-        '你愿意核对实际份量，这份认真值得肯定。按真实情况记录就很好。',
-        '这顿已经按你的说明改好了，愿意认真核对，也是在照顾自己。',
-        '谢谢你把实际吃过的份量说清楚。愿意调整记录，这件事本身就做得不错。',
+        ['敢调整，就是在认真向前。','这一餐已按实际份量更新。愿意回来核对，这一步做得漂亮。'],
+        ['把真实记清楚，这一步很有分量。','记录已经修正。你认真对待自己的实际情况，这份用心值得骄傲。'],
+        ['认真核对的人，自带向前的力量。','这顿按你的说明改好了。为愿意核对、主动调整的自己，鼓一次掌。'],
       ],
       backfill:[
-        '这顿补记好了，愿意回来补上，也是认真照顾自己的一个小动作。',
-        '又补上了一份真实的饮食记录，给这份用心一点肯定。',
-        '愿意把之前吃过的食物补记下来，也值得一句“做得不错”。',
+        ['回来补上，这一步也算数。','之前吃过的这顿已经补记。愿意回头把记录补清楚，做得漂亮。'],
+        ['补上一餐，也是在为自己加把劲。','这顿已经记到对应日期。你为自己多花的这份心思，值得被看见。'],
+        ['现在补上，也值得为自己鼓掌。','这份之前的饮食记录已留下。照顾自己的行动，可以从此刻继续。'],
       ],
     };
     // Stable across rerenders; dates and newly confirmed records add gentle variety.
     let hash=0;
     for (const char of `${date}|${kind}|${meals.length}|${moment}`) hash=(hash*31+char.charCodeAt(0))>>>0;
     const variants=messages[kind];
-    return {encouragement:variants[hash%variants.length],encouragementKind:kind};
+    const [encouragement,encouragementDetail,source]=variants[hash%variants.length];
+    return {encouragement,encouragementDetail,encouragementContext:contexts[kind],encouragementSource:source||null,encouragementKind:kind};
   }
 
   // Explain confirmed totals, without treating an unfinished food log as a full day.

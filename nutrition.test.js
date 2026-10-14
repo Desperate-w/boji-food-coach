@@ -76,7 +76,7 @@ test("history feedback uses that day's plan and never invents a missing target",
 test('encouragement recognizes recorded breakfast lunch and dinner even before nutrition targets are reached',()=>{
   const plan=calculate(person),meals=['早餐','午餐','晚餐'].map(type=>({type}));
   const feedback=context.window.BojiNutrition.describeDay({plan,meals,totals:{calories:900,protein:35},date:'2026-10-13'});
-  assert.equal(feedback.encouragementKind,'three-meals');assert.match(feedback.encouragement,/三餐|早餐、午餐和晚餐/);
+  assert.equal(feedback.encouragementKind,'three-meals');assert.match(feedback.encouragement+feedback.encouragementDetail,/三餐|早餐、午餐和晚餐/);
   assert.equal(feedback.tone,'neutral');assert.equal(feedback.proteinGap,85);
   const snacks=context.window.BojiNutrition.describeDay({plan,meals:[{type:'加餐'},{type:'加餐'},{type:'加餐'}]});
   assert.notEqual(snacks.encouragementKind,'three-meals');
@@ -87,8 +87,21 @@ test('encouragement stays positive for over-target days without hiding the nutri
   for (const date of ['2026-10-10','2026-10-11','2026-10-12']) {
     const feedback=describeDay({plan,meals,totals:{calories:3000,protein:50},isToday:false,date});
     assert.equal(feedback.tone,'attention');assert.equal(feedback.encouragementKind,'honest-record');
-    assert.ok(feedback.encouragement.length>0);assert.doesNotMatch(feedback.encouragement,/今天|失败|不自律|管住嘴|瘦了|连续/);
+    assert.ok(feedback.encouragement.length>0);assert.doesNotMatch(feedback.encouragement+feedback.encouragementDetail,/今天|失败|不自律|管住嘴|瘦了|连续/);
   }
+});
+
+test('motivational quotes retain attribution while original copy and empty days do not claim a source',()=>{
+  const describeDay=context.window.BojiNutrition.describeDay,meals=[{type:'午餐'}];
+  const variants=Array.from({length:9},(_,i)=>describeDay({meals,date:`2026-10-${10+i}`}));
+  const quoted=variants.filter(feedback=>feedback.encouragementSource);
+  assert.ok(quoted.length>0);assert.ok(variants.some(feedback=>!feedback.encouragementSource));
+  for(const feedback of quoted){
+    assert.equal(feedback.encouragement,'走过的每一步都算数。');
+    assert.equal(feedback.encouragementSource.url,'https://www.douyin.com/video/7370299486066740495');
+    assert.match(feedback.encouragementDetail,/这一餐已记录/);
+  }
+  const empty=describeDay();assert.equal(empty.encouragementSource,null);assert.equal(empty.encouragementDetail,'');
 });
 
 test('empty days do not receive success praise and edits or backfills recognize the actual action',()=>{

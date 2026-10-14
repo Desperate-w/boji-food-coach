@@ -11,7 +11,7 @@
     mic: '<rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8"/>',
     send: '<path d="m4 12 16-8-4 16-4-7-8-1Z"/><path d="m12 13 8-9"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
-    heart: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/>',
+    bolt: '<path d="m13 2-9 12h7l-1 8 10-12h-7l1-8Z"/>',
     camera: '<path d="M4 7h4l2-2h4l2 2h4v12H4V7Z"/><circle cx="12" cy="13" r="3"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1"/><path d="m21 16-5-5L5 21"/>',
     close: '<path d="M5 5 19 19M19 5 5 19"/>',
@@ -192,7 +192,9 @@
     }).join('')}</div>`;
   }
   function renderEncouragement(feedback) {
-    return feedback.encouragement?`<p class="day-encouragement" data-encouragement-kind="${feedback.encouragementKind}">${icon('heart')}<span>${escapeHtml(feedback.encouragement)}</span></p>`:'';
+    if (!feedback.encouragement) return '';
+    const source=feedback.encouragementSource;
+    return `<section class="day-encouragement" aria-label="精神氮泵" data-encouragement-kind="${feedback.encouragementKind}"><div class="encouragement-heading"><span>${icon('bolt')}精神氮泵</span><small>${escapeHtml(feedback.encouragementContext)}</small></div><blockquote class="encouragement-quote">${escapeHtml(feedback.encouragement)}</blockquote><p class="encouragement-detail">${escapeHtml(feedback.encouragementDetail)}</p>${source?`<a class="encouragement-source" href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">短句来源 · ${escapeHtml(source.label)} ↗</a>`:''}</section>`;
   }
   function renderReceipt(r, revised=false, showEdit=true) {
     return `<div class="receipt"><div class="receipt-top"><div><div class="receipt-label">${icon('check')}${revised?'已更新':'已记录'}${escapeHtml(r.type)}</div><div class="receipt-title">${escapeHtml(r.name)}</div></div><div class="receipt-time">${escapeHtml(r.time||'刚刚')}</div></div>
@@ -226,8 +228,8 @@
     const onToday=Boolean(current);
     const feedback=onToday?nutrition.describeDay({totals:totals(),plan:state.profile,meals:state.meals,date:state.activeDate,moment:m.revised?'correction':'record'}):null;
     const praise=feedback||nutrition.describeDay({meals:[r],isToday:false,date:state.activeDate,moment:m.revised?'correction':'backfill'});
-    const impact=feedback?`<div class="record-impact tone-${feedback.tone}"><span>今天吃到这里</span><h3>${escapeHtml(feedback.headline)}</h3>${renderEncouragement(praise)}<div class="record-impact-progress"><span>今天蛋白质已完成 <strong>${feedback.proteinPercent}%</strong></span><span>${feedback.proteinGap>8?`还差约 ${fmt(feedback.proteinGap)}g`:'基本达到目标'}</span></div><div class="protein-track" role="progressbar" aria-label="记录后的蛋白质进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${feedback.proteinPercent}"><div class="protein-fill" style="width:${feedback.proteinPercent}%"></div></div><p><strong>下一顿</strong>${escapeHtml(feedback.next)}</p></div>`:renderEncouragement(praise);
-    return `<div class="record-feedback"><p class="record-feedback-label">${icon('check')}${onToday?'今日记录已更新':'对应日期的记录已更新'}</p>${renderReceipt(r,m.revised)}${impact}<details class="coach-explanation"><summary>查看教练的建议 ${icon('down')}</summary><div>${renderRichText(m.text)}${!onToday&&m.after?renderRichText(m.after):''}</div></details>${renderReasoning(m)}</div>`;
+    const impact=feedback?`<div class="record-impact tone-${feedback.tone}"><span>今天吃到这里</span><h3>${escapeHtml(feedback.headline)}</h3><div class="record-impact-progress"><span>今天蛋白质已完成 <strong>${feedback.proteinPercent}%</strong></span><span>${feedback.proteinGap>8?`还差约 ${fmt(feedback.proteinGap)}g`:'基本达到目标'}</span></div><div class="protein-track" role="progressbar" aria-label="记录后的蛋白质进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${feedback.proteinPercent}"><div class="protein-fill" style="width:${feedback.proteinPercent}%"></div></div><p><strong>下一顿</strong>${escapeHtml(feedback.next)}</p></div>`:'';
+    return `<div class="record-feedback"><p class="record-feedback-label">${icon('check')}${onToday?'今日记录已更新':'对应日期的记录已更新'}</p>${renderEncouragement(praise)}${renderReceipt(r,m.revised)}${impact}<details class="coach-explanation"><summary>查看教练的建议 ${icon('down')}</summary><div>${renderRichText(m.text)}${!onToday&&m.after?renderRichText(m.after):''}</div></details>${renderReasoning(m)}</div>`;
   }
   function renderComposer() {
     const disabled=state.pending||state.photoPreparing?'disabled':'';

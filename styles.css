@@ -109,10 +109,16 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .today-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .day-kicker { color: #52675b; font-size: 13px; font-weight: 650; }
 .day-headline { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: clamp(20px, 2vw, 26px); line-height: 1.5; letter-spacing: -.035em; font-weight: 650; margin: 0 0 22px; text-wrap: pretty; }
-.day-headline.with-encouragement { margin-bottom: 9px; }
-.day-encouragement { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 18px; color: #49705c; font-size: 13px; line-height: 1.75; font-weight: 400; }
-.day-encouragement > svg { width: 16px; height: 16px; margin-top: 3px; color: #6d9b81; }
-.day-encouragement > span { max-width: 62ch; }
+.day-headline.with-encouragement { margin-bottom: 16px; }
+.day-encouragement { --pump-ink: #244a3a; --pump-surface: #f0f5ed; --pump-line: #c9dac6; --pump-label: #526c49; --pump-mark: #e2edc5; box-sizing: border-box; min-width: 0; margin: 0 0 20px; padding: 16px 18px; border: 1px solid var(--pump-line); border-left: 4px solid #759951; border-radius: 14px; background: var(--pump-surface); color: var(--pump-ink); }
+.encouragement-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 10px; }
+.encouragement-heading > span { display: inline-flex; align-items: center; gap: 7px; color: var(--pump-label); font-size: 12px; font-weight: 650; }
+.encouragement-heading svg { width: 22px; height: 22px; padding: 3px; border-radius: 6px; background: var(--pump-mark); }
+.encouragement-heading > small { color: #617456; font-size: 11px; }
+.encouragement-quote { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 0; color: var(--pump-ink); font-size: clamp(19px, 1.9vw, 24px); line-height: 1.5; letter-spacing: -.025em; font-weight: 700; overflow-wrap: anywhere; text-wrap: pretty; }
+.day-encouragement .encouragement-detail { max-width: 64ch; margin: 9px 0 0; color: #50634b; font-size: 13px; line-height: 1.7; }
+.encouragement-source { display: inline-block; margin-top: 9px; color: #4f6746; font-size: 11px; line-height: 1.6; text-underline-offset: 3px; }
+.encouragement-source:hover { color: var(--pump-ink); }
 .status-badge.tone-neutral { color: #5c6d62; background: #f0f3ef; }
 .status-badge.tone-attention { color: #92592d; background: #faf0e2; }
 .day-next-step { display: flex; align-items: flex-start; gap: 10px; border-radius: 13px; padding: 14px 16px; margin-top: 18px; background: var(--accent-soft); }
@@ -180,7 +186,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .feedback-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
 .record-feedback-label { display: flex; align-items: center; gap: 6px; margin: 0 0 12px; font-size: 13px; font-weight: 650; color: var(--accent); }
 .record-feedback-label svg { width: 17px; height: 17px; }
-.record-feedback > .day-encouragement { margin: 14px 0; }
+.record-feedback > .day-encouragement { margin: 0 0 16px; }
 .record-feedback .receipt { max-width: none; margin: 0; box-shadow: none; border-radius: 13px; }
 .record-feedback .receipt-top { padding: 15px 18px 12px; }
 .record-feedback .receipt-values { padding: 13px 18px; }
@@ -189,7 +195,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .record-impact.tone-attention { border-left-color: #c69254; }
 .record-impact > span { color: var(--muted); font-size: 11px; }
 .record-impact h3 { margin: 7px 0 9px; color: var(--ink); font-size: 17px; line-height: 1.6; font-weight: 650; }
-.record-impact > .day-encouragement { margin: 0 0 13px; gap: 8px; align-items: flex-start; color: #49705c; }
 .record-impact-progress { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: #536b5d; font-size: 12px; }
 .record-impact .protein-track { margin-top: 9px; height: 6px; }
 .record-impact > p { display: flex; align-items: baseline; gap: 10px; margin: 12px 0 0; font-size: 13px; line-height: 1.7; color: #52675b; }
@@ -365,8 +370,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .history-nutrition-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .history-nutrition-head h3 { font-size: 18px; letter-spacing: -.04em; margin: 8px 0 0; }
 .history-nutrition .day-headline { font-size: 21px; margin: 0 0 22px; }
-.history-nutrition .day-headline.with-encouragement { margin-bottom: 9px; }
-.history-nutrition .day-encouragement { margin: 0 0 8px; color: #49705c; font-size: 13px; line-height: 1.75; }
+.history-nutrition .day-headline.with-encouragement { margin-bottom: 16px; }
+.history-nutrition .day-encouragement { margin: 0 0 16px; }
 .history-key-metric { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px; margin-top: 19px; }
 .history-key-metric > div > span { color: #52675b; font-size: 12px; }
 .history-key-metric strong { display: block; margin-top: 8px; font-size: 29px; letter-spacing: -.045em; font-weight: 650; font-variant-numeric: tabular-nums; }
@@ -666,6 +671,9 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   .today-stat { padding: 14px 12px; }
   .stat-interpretation { font-size: 12px; line-height: 1.6; }
   .day-headline { font-size: 21px; margin-bottom: 17px; }
+  .day-encouragement { padding: 14px; }
+  .encouragement-quote { font-size: 20px; }
+  .day-encouragement .encouragement-detail { font-size: 13px; }
   .day-next-step { padding: 12px; }
   .day-next-step p { font-size: 13px; }
   .meal-coverage { gap: 5px; }
