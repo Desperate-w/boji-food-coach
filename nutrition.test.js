@@ -91,17 +91,15 @@ test('encouragement stays positive for over-target days without hiding the nutri
   }
 });
 
-test('motivational quotes retain attribution while original copy and empty days do not claim a source',()=>{
+test('motivational feedback remains direct text with recording context and no link metadata',()=>{
   const describeDay=context.window.BojiNutrition.describeDay,meals=[{type:'午餐'}];
   const variants=Array.from({length:9},(_,i)=>describeDay({meals,date:`2026-10-${10+i}`}));
-  const quoted=variants.filter(feedback=>feedback.encouragementSource);
-  assert.ok(quoted.length>0);assert.ok(variants.some(feedback=>!feedback.encouragementSource));
-  for(const feedback of quoted){
-    assert.equal(feedback.encouragement,'走过的每一步都算数。');
-    assert.equal(feedback.encouragementSource.url,'https://www.douyin.com/video/7370299486066740495');
-    assert.match(feedback.encouragementDetail,/这一餐已记录/);
+  assert.ok(variants.some(feedback=>feedback.encouragement==='走过的每一步都算数。'));
+  for(const feedback of variants){
+    assert.ok(feedback.encouragement.length>0);assert.ok(feedback.encouragementDetail.length>0);
+    assert.doesNotMatch(JSON.stringify(feedback),/https?:|douyin\.com|encouragementSource/);
   }
-  const empty=describeDay();assert.equal(empty.encouragementSource,null);assert.equal(empty.encouragementDetail,'');
+  assert.equal(describeDay().encouragementDetail,'');
 });
 
 test('empty days do not receive success praise and edits or backfills recognize the actual action',()=>{

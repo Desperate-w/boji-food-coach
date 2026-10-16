@@ -58,7 +58,7 @@
   }
 
   function dayEncouragement({meals,plan,calories,protein,isToday,date,moment}) {
-    if (!meals.length) return {encouragement:'',encouragementDetail:'',encouragementContext:'',encouragementSource:null,encouragementKind:'none'};
+    if (!meals.length) return {encouragement:'',encouragementDetail:'',encouragementContext:'',encouragementKind:'none'};
     const day=isToday?'今天':'这一天';
     const types=new Set(meals.map(meal=>meal.type));
     const threeMeals=['早餐','午餐','晚餐'].every(type=>types.has(type));
@@ -70,16 +70,15 @@
     else if (plan && calories>plan.caloriesMax) kind='honest-record';
     else if (plan && calories>=plan.caloriesMin && protein>=plan.proteinTarget-8) kind='on-plan';
     else kind='keep-recording';
-    const stepSource={label:'大煜健身 · 抖音',url:'https://www.douyin.com/video/7370299486066740495'};
     const contexts={first:'一餐已记录','three-meals':'三餐都有记录','honest-record':'如实记录','on-plan':'接近计划','keep-recording':'又记下一餐',correction:'记录已修正',backfill:'补记已完成'};
     const messages={
       first:[
-        ['走过的每一步都算数。','这一餐已记录。你把照顾自己的想法，变成了行动。',stepSource],
+        ['走过的每一步都算数。','这一餐已记录。你把照顾自己的想法，变成了行动。'],
         ['从这一餐，掌握自己的节奏。','记录已经留下，接下来一餐一餐来。这一步，做得漂亮。'],
         ['给自己一个开始，就从这一餐。','你认真记下了吃过什么。为自己的这份行动，鼓一次掌。'],
       ],
       'three-meals':[
-        ['走过的每一步都算数。',`${day}的三餐都有记录了。为自己花的这份心思，值得认真庆祝。`,stepSource],
+        ['走过的每一步都算数。',`${day}的三餐都有记录了。为自己花的这份心思，值得认真庆祝。`],
         ['三餐记下，这份认真很有分量。','早餐、午餐和晚餐都留下了记录。为这份实实在在的行动，鼓掌。'],
         ['三餐都记下，为自己鼓一次掌。',`${day}你把认真落在了每一餐里。这份投入，值得骄傲。`],
       ],
@@ -113,8 +112,8 @@
     let hash=0;
     for (const char of `${date}|${kind}|${meals.length}|${moment}`) hash=(hash*31+char.charCodeAt(0))>>>0;
     const variants=messages[kind];
-    const [encouragement,encouragementDetail,source]=variants[hash%variants.length];
-    return {encouragement,encouragementDetail,encouragementContext:contexts[kind],encouragementSource:source||null,encouragementKind:kind};
+    const [encouragement,encouragementDetail]=variants[hash%variants.length];
+    return {encouragement,encouragementDetail,encouragementContext:contexts[kind],encouragementKind:kind};
   }
 
   // Explain confirmed totals, without treating an unfinished food log as a full day.

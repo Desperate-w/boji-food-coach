@@ -117,8 +117,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .encouragement-heading > small { color: #617456; font-size: 11px; }
 .encouragement-quote { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 0; color: var(--pump-ink); font-size: clamp(19px, 1.9vw, 24px); line-height: 1.5; letter-spacing: -.025em; font-weight: 700; overflow-wrap: anywhere; text-wrap: pretty; }
 .day-encouragement .encouragement-detail { max-width: 64ch; margin: 9px 0 0; color: #50634b; font-size: 13px; line-height: 1.7; }
-.encouragement-source { display: inline-block; margin-top: 9px; color: #4f6746; font-size: 11px; line-height: 1.6; text-underline-offset: 3px; }
-.encouragement-source:hover { color: var(--pump-ink); }
 .status-badge.tone-neutral { color: #5c6d62; background: #f0f3ef; }
 .status-badge.tone-attention { color: #92592d; background: #faf0e2; }
 .day-next-step { display: flex; align-items: flex-start; gap: 10px; border-radius: 13px; padding: 14px 16px; margin-top: 18px; background: var(--accent-soft); }

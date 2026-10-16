@@ -231,6 +231,7 @@ test('visible meal feedback praises recording and correction rather than waiting
   const feedback=today.app.innerHTML.slice(today.app.innerHTML.indexOf('<div class="record-feedback">'));
   assert.ok(feedback.indexOf('aria-label="精神氮泵"')<feedback.indexOf('class="receipt"'));
   assert.match(feedback,/class="encouragement-quote"/);assert.match(feedback,/class="encouragement-detail"/);
+  for(const [,copy] of today.app.innerHTML.matchAll(/<section class="day-encouragement"[^>]*>([\s\S]*?)<\/section>/g)) assert.doesNotMatch(copy,/<a\b|href=|短句来源/);
   today.click('example','其实鸡蛋只吃了一半');assert.match(today.app.innerHTML,/data-encouragement-kind="correction"/);
 });
 

@@ -193,8 +193,7 @@
   }
   function renderEncouragement(feedback) {
     if (!feedback.encouragement) return '';
-    const source=feedback.encouragementSource;
-    return `<section class="day-encouragement" aria-label="精神氮泵" data-encouragement-kind="${feedback.encouragementKind}"><div class="encouragement-heading"><span>${icon('bolt')}精神氮泵</span><small>${escapeHtml(feedback.encouragementContext)}</small></div><blockquote class="encouragement-quote">${escapeHtml(feedback.encouragement)}</blockquote><p class="encouragement-detail">${escapeHtml(feedback.encouragementDetail)}</p>${source?`<a class="encouragement-source" href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">短句来源 · ${escapeHtml(source.label)} ↗</a>`:''}</section>`;
+    return `<section class="day-encouragement" aria-label="精神氮泵" data-encouragement-kind="${feedback.encouragementKind}"><div class="encouragement-heading"><span>${icon('bolt')}精神氮泵</span><small>${escapeHtml(feedback.encouragementContext)}</small></div><blockquote class="encouragement-quote">${escapeHtml(feedback.encouragement)}</blockquote><p class="encouragement-detail">${escapeHtml(feedback.encouragementDetail)}</p></section>`;
   }
   function renderReceipt(r, revised=false, showEdit=true) {
     return `<div class="receipt"><div class="receipt-top"><div><div class="receipt-label">${icon('check')}${revised?'已更新':'已记录'}${escapeHtml(r.type)}</div><div class="receipt-title">${escapeHtml(r.name)}</div></div><div class="receipt-time">${escapeHtml(r.time||'刚刚')}</div></div>
